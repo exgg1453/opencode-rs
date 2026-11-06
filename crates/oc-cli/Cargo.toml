@@ -13,6 +13,7 @@ oc-core.workspace = true
 oc-tui.workspace = true
 oc-server.workspace = true
 oc-ext.workspace = true
+oc-lsp.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 tokio.workspace = true

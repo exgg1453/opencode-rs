@@ -258,6 +258,7 @@ async fn real_agent_with_mock_provider() {
         model: "mock/m".into(),
         tools: oc_core::ToolRegistry::default(),
         system_prompt: String::new(),
+        hooks: Default::default(),
     };
     let store = oc_core::SessionStore::open_default().unwrap();
     let app = router(AppState::from_agent(agent, store));

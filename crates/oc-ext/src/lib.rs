@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use oc_core::{Config, Tool, ToolContext, ToolRegistry};
+use oc_core::{Config, Tool, ToolContext, ToolHook, ToolRegistry};
 
 pub use client::{McpClient, McpToolInfo};
 pub use config::McpServerConfig;
@@ -115,6 +115,12 @@ async fn futures_join(
         out.push((name, r));
     }
     out
+}
+
+/// Starts the process plugins listed in `config.plugin` and returns them as
+/// agent tool hooks. Owner: plugin agent; keep this signature.
+pub async fn load_plugins(_config: &Config, _cwd: &std::path::Path) -> anyhow::Result<Vec<Arc<dyn ToolHook>>> {
+    Ok(Vec::new())
 }
 
 #[cfg(test)]

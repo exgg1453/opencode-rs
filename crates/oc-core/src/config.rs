@@ -9,6 +9,21 @@ pub struct Config {
     pub model: Option<String>,
     #[serde(default)]
     pub mcp: serde_json::Map<String, serde_json::Value>,
+    /// Per-provider settings: `{ "<id>": { "options": { "baseURL": ..., ... } } }`.
+    #[serde(default)]
+    pub provider: serde_json::Map<String, serde_json::Value>,
+    /// Permission rules, e.g. `{ "edit": "ask", "bash": { "git *": "allow", "*": "ask" } }`.
+    #[serde(default)]
+    pub permission: serde_json::Map<String, serde_json::Value>,
+    /// TUI theme name.
+    pub theme: Option<String>,
+    /// Process plugins: `{ "<name>": { "command": [...], "enabled": true } }`.
+    #[serde(default)]
+    pub plugin: serde_json::Map<String, serde_json::Value>,
+    /// Language servers: `{ "<name>": { "command": [...], "extensions": [...] } }`; `false` disables LSP.
+    pub lsp: Option<serde_json::Value>,
+    /// Base URL of the share server.
+    pub share_url: Option<String>,
 }
 
 pub(crate) fn home_dir() -> Option<PathBuf> {
@@ -53,6 +68,24 @@ impl Config {
         }
         for (k, v) in other.mcp {
             self.mcp.insert(k, v);
+        }
+        for (k, v) in other.provider {
+            self.provider.insert(k, v);
+        }
+        for (k, v) in other.permission {
+            self.permission.insert(k, v);
+        }
+        for (k, v) in other.plugin {
+            self.plugin.insert(k, v);
+        }
+        if other.theme.is_some() {
+            self.theme = other.theme;
+        }
+        if other.lsp.is_some() {
+            self.lsp = other.lsp;
+        }
+        if other.share_url.is_some() {
+            self.share_url = other.share_url;
         }
     }
 }

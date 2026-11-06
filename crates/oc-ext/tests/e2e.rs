@@ -10,7 +10,7 @@ fn ctx() -> ToolContext {
 }
 
 fn config(v: Value) -> Config {
-    Config { model: None, mcp: v.as_object().unwrap().clone() }
+    Config { mcp: v.as_object().unwrap().clone(), ..Default::default() }
 }
 
 #[tokio::test]

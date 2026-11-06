@@ -28,7 +28,7 @@ impl Provider for Mock {
 fn agent(turns: Vec<Vec<StreamEvent>>) -> (Agent, Arc<Mock>) {
     let m = Arc::new(Mock { turns: Mutex::new(turns.into()), seen: Mutex::new(vec![]) });
     (
-        Agent { provider: m.clone(), model: "m".into(), tools: ToolRegistry::builtin(), system_prompt: DEFAULT_SYSTEM_PROMPT.into() },
+        Agent { provider: m.clone(), model: "m".into(), tools: ToolRegistry::builtin(), system_prompt: DEFAULT_SYSTEM_PROMPT.into(), hooks: Default::default() },
         m,
     )
 }

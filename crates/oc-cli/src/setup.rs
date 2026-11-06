@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use oc_core::{Agent, Config, ToolRegistry};
+use oc_core::{Agent, AgentHooks, Config, ToolRegistry};
 
 use crate::cli::DEFAULT_MODEL;
 
@@ -29,13 +29,20 @@ pub fn resolve_cwd(cwd: Option<PathBuf>) -> Result<PathBuf> {
 pub async fn build_agent(model_flag: Option<&str>, cwd: &std::path::Path) -> Result<Agent> {
     let config = Config::load(cwd)?;
     let model = resolve_model(model_flag, &config);
-    let (provider, model_id) = oc_core::provider_from_model(&model)?;
+    let (provider, model_id) = oc_core::provider_from_config(&model, &config)?;
     let mut tools = ToolRegistry::builtin();
     if let Err(e) = oc_ext::load_extensions(&config, &mut tools).await {
         tracing::warn!("failed to load extensions: {e:#}");
         eprintln!("warning: failed to load extensions: {e:#}");
     }
-    Ok(Agent { provider, model: model_id, tools, system_prompt: SYSTEM_PROMPT.to_string() })
+    let mut hooks = AgentHooks::default();
+    match oc_ext::load_plugins(&config, cwd).await {
+        Ok(p) => hooks.tools = p,
+        Err(e) => eprintln!("warning: failed to load plugins: {e:#}"),
+    }
+    hooks.diagnostics = oc_lsp::start(&config, cwd).await;
+    // The permission handler depends on the front end (TUI, run, serve) and is set by the caller.
+    Ok(Agent { provider, model: model_id, tools, system_prompt: SYSTEM_PROMPT.to_string(), hooks })
 }
 
 #[cfg(test)]

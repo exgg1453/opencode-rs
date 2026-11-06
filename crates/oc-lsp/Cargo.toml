@@ -1,0 +1,12 @@
+[package]
+name = "oc-lsp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+oc-core.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true

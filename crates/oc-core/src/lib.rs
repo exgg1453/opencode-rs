@@ -12,12 +12,17 @@ use oc_ai::Provider;
 use serde::{Deserialize, Serialize};
 
 mod agent;
+pub mod auth;
 mod config;
+pub mod hooks;
+pub mod permission;
+pub mod share;
 mod prompt;
 mod session;
 pub mod tools;
 
-pub use agent::provider_from_model;
+pub use agent::{provider_from_config, provider_from_model};
+pub use hooks::{AgentHooks, DiagnosticsProvider, PermissionDecision, PermissionHandler, PermissionRequest, ToolHook};
 pub use config::Config;
 pub use prompt::DEFAULT_SYSTEM_PROMPT;
 pub use session::{Session, SessionStore};
@@ -65,6 +70,7 @@ pub struct Agent {
     pub model: String,
     pub tools: ToolRegistry,
     pub system_prompt: String,
+    pub hooks: AgentHooks,
 }
 
 #[cfg(test)]

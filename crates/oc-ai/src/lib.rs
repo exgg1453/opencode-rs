@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 
 pub mod anthropic;
 pub mod openai;
+pub mod registry;
 pub mod sse;
+
+pub use registry::{build_provider, ProviderOptions};
 
 pub use anthropic::AnthropicProvider;
 pub use openai::OpenAiProvider;
