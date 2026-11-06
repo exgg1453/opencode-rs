@@ -1,7 +1,9 @@
 //! `opencode` binary entry point.
 
+mod account;
 mod cli;
 mod format;
+mod prompt;
 mod run;
 mod setup;
 
@@ -41,6 +43,26 @@ async fn real_main() -> Result<bool> {
                 println!("{name}\t{example}\t({env}: {set})");
             }
             println!("default model: {}", cli::DEFAULT_MODEL);
+            Ok(true)
+        }
+        Some(Command::Auth(c)) => {
+            account::run_auth(c)?;
+            Ok(true)
+        }
+        Some(Command::Share(a)) => {
+            account::run_share(&cwd, a).await?;
+            Ok(true)
+        }
+        Some(Command::Unshare(a)) => {
+            account::run_unshare(&cwd, a).await?;
+            Ok(true)
+        }
+        Some(Command::Export(a)) => {
+            account::run_export(a)?;
+            Ok(true)
+        }
+        Some(Command::Import(a)) => {
+            account::run_import(a)?;
             Ok(true)
         }
         Some(Command::Sessions) => {

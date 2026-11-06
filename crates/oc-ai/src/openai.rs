@@ -10,11 +10,36 @@ use serde_json::{json, Value};
 use crate::sse::{drive, EventProcessor, SseEvent};
 use crate::{ChatRequest, ContentBlock, Provider, Role, StreamEvent};
 
+/// How the provider authenticates.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AuthStyle {
+    /// `Authorization: Bearer <key>`
+    Bearer,
+    /// A custom header carrying the raw key (e.g. Azure's `api-key`).
+    Header(String),
+    /// No authentication (local servers).
+    None,
+}
+
+/// How the chat completions URL is built.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UrlStyle {
+    /// `{base}/chat/completions`
+    Standard,
+    /// Azure OpenAI: `{base}/openai/deployments/{model}/chat/completions?api-version=V`
+    AzureDeployments { api_version: String },
+    /// Azure OpenAI v1: `{base}/openai/v1/chat/completions?api-version=V`
+    AzureV1 { api_version: String },
+}
+
 pub struct OpenAiProvider {
     id: String,
     api_key: String,
     base_url: String,
     client: reqwest::Client,
+    auth: AuthStyle,
+    url_style: UrlStyle,
+    backoff: std::time::Duration,
 }
 
 impl OpenAiProvider {
@@ -24,6 +49,38 @@ impl OpenAiProvider {
             api_key: api_key.into(),
             base_url: "https://api.openai.com/v1".into(),
             client: reqwest::Client::new(),
+            auth: AuthStyle::Bearer,
+            url_style: UrlStyle::Standard,
+            backoff: crate::http::DEFAULT_BACKOFF,
+        }
+    }
+
+    pub fn with_auth(mut self, auth: AuthStyle) -> Self {
+        self.auth = auth;
+        self
+    }
+
+    pub fn with_url_style(mut self, style: UrlStyle) -> Self {
+        self.url_style = style;
+        self
+    }
+
+    pub fn with_backoff(mut self, d: std::time::Duration) -> Self {
+        self.backoff = d;
+        self
+    }
+
+    /// Full request URL for a model.
+    pub fn endpoint(&self, model: &str) -> String {
+        match &self.url_style {
+            UrlStyle::Standard => format!("{}/chat/completions", self.base_url),
+            UrlStyle::AzureDeployments { api_version } => format!(
+                "{}/openai/deployments/{}/chat/completions?api-version={}",
+                self.base_url, model, api_version
+            ),
+            UrlStyle::AzureV1 { api_version } => {
+                format!("{}/openai/v1/chat/completions?api-version={}", self.base_url, api_version)
+            }
         }
     }
 
@@ -203,19 +260,18 @@ impl Provider for OpenAiProvider {
     }
 
     async fn stream(&self, req: ChatRequest) -> anyhow::Result<BoxStream<'static, anyhow::Result<StreamEvent>>> {
-        let resp = self
-            .client
-            .post(format!("{}/chat/completions", self.base_url))
-            .bearer_auth(&self.api_key)
-            .json(&build_body(&req))
-            .send()
-            .await
-            .context("openai request failed")?;
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("openai API error {status}: {text}"));
-        }
+        let body = build_body(&req);
+        let url = self.endpoint(&req.model);
+        let id = self.id.clone();
+        let resp = crate::http::send_with_retry(&id, self.backoff, || {
+            let rb = self.client.post(&url).json(&body);
+            match &self.auth {
+                AuthStyle::Bearer => rb.bearer_auth(&self.api_key),
+                AuthStyle::Header(h) => rb.header(h.as_str(), &self.api_key),
+                AuthStyle::None => rb,
+            }
+        })
+        .await?;
         let bytes = resp.bytes_stream().map(|r| r.map(|b| b.to_vec()).map_err(anyhow::Error::from)).boxed();
         Ok(drive(bytes, OpenAiProcessor::default()))
     }

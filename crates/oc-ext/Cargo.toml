@@ -21,3 +21,8 @@ axum.workspace = true
 name = "fake_mcp"
 path = "src/bin/fake_mcp.rs"
 test = false
+
+[[bin]]
+name = "example_plugin"
+path = "src/bin/example_plugin.rs"
+test = false

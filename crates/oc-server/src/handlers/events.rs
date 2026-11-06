@@ -31,5 +31,8 @@ pub async fn stream(State(state): State<AppState>) -> Sse<impl Stream<Item = Res
     });
     // Lagged receivers drop missed events rather than ending the stream.
     let live = BroadcastStream::new(rx).filter_map(|r| async move { r.ok().map(|e| Ok(to_sse(&e))) });
-    Sse::new(hello.chain(live)).keep_alive(KeepAlive::default())
+    let asked = BroadcastStream::new(state.permissions.subscribe()).filter_map(|r| async move {
+        r.ok().map(|p| Ok(Event::default().event("permission.asked").json_data(&p).unwrap_or_else(|_| Event::default().data("{}"))))
+    });
+    Sse::new(hello.chain(stream::select(live, asked))).keep_alive(KeepAlive::default())
 }

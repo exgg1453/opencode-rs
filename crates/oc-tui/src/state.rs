@@ -19,7 +19,16 @@ pub struct SessionPopup {
     pub selected: usize,
 }
 
+pub struct ThemePopup {
+    pub names: Vec<String>,
+    pub selected: usize,
+    /// Theme to restore on cancel.
+    pub original: String,
+}
+
 pub struct AppState {
+    pub theme_popup: Option<ThemePopup>,
+    pub perm: crate::perm::PermissionDialog,
     pub blocks: Vec<Block>,
     pub editor: Editor,
     pub busy: bool,
@@ -37,6 +46,8 @@ pub struct AppState {
 impl AppState {
     pub fn new(model: String, cwd: String, title: String) -> Self {
         AppState {
+            theme_popup: None,
+            perm: Default::default(),
             blocks: Vec::new(),
             editor: Editor::default(),
             busy: false,

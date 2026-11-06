@@ -6,6 +6,7 @@
 pub mod client;
 pub mod config;
 pub mod plugin;
+pub mod process;
 pub mod rpc;
 
 use std::sync::Arc;
@@ -117,10 +118,32 @@ async fn futures_join(
     out
 }
 
-/// Starts the process plugins listed in `config.plugin` and returns them as
-/// agent tool hooks. Owner: plugin agent; keep this signature.
-pub async fn load_plugins(_config: &Config, _cwd: &std::path::Path) -> anyhow::Result<Vec<Arc<dyn ToolHook>>> {
-    Ok(Vec::new())
+/// Starts the process plugins (see `PLUGINS.md`) and returns them as agent tool hooks.
+/// Custom tools defined by plugins are dropped; use [`load_plugins_with_tools`] to get them.
+pub async fn load_plugins(config: &Config, cwd: &std::path::Path) -> anyhow::Result<Vec<Arc<dyn ToolHook>>> {
+    let mut scratch = ToolRegistry::default();
+    load_plugins_with_tools(config, cwd, &mut scratch).await
+}
+
+/// Like [`load_plugins`], but also registers plugin-defined tools into `registry`.
+/// A plugin that fails to start is logged and skipped.
+pub async fn load_plugins_with_tools(
+    config: &Config,
+    cwd: &std::path::Path,
+    registry: &mut ToolRegistry,
+) -> anyhow::Result<Vec<Arc<dyn ToolHook>>> {
+    let specs = process::discover(config, cwd);
+    let mut hooks: Vec<Arc<dyn ToolHook>> = Vec::new();
+    for spec in specs {
+        match process::ProcessPlugin::start(&spec, cwd).await {
+            Ok((plugin, tools)) => {
+                tools.into_iter().for_each(|t| registry.register(t));
+                hooks.push(plugin);
+            }
+            Err(e) => tracing::warn!("plugin '{}' failed to start: {e:#}", spec.name),
+        }
+    }
+    Ok(hooks)
 }
 
 #[cfg(test)]

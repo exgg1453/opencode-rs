@@ -36,7 +36,7 @@ pub async fn build_agent(model_flag: Option<&str>, cwd: &std::path::Path) -> Res
         eprintln!("warning: failed to load extensions: {e:#}");
     }
     let mut hooks = AgentHooks::default();
-    match oc_ext::load_plugins(&config, cwd).await {
+    match oc_ext::load_plugins_with_tools(&config, cwd, &mut tools).await {
         Ok(p) => hooks.tools = p,
         Err(e) => eprintln!("warning: failed to load plugins: {e:#}"),
     }

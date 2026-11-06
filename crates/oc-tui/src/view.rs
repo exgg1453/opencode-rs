@@ -6,6 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as UiBlock, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
+use crate::perm::draw_dialog;
+
 use crate::markdown::{markdown_lines, wrap_text};
 use crate::state::{AppState, Block};
 use crate::theme::Theme;
@@ -74,6 +76,7 @@ pub fn transcript_lines(state: &AppState, width: usize, theme: &Theme) -> Vec<Li
 
 pub fn draw(f: &mut Frame, state: &mut AppState, theme: &Theme) {
     let area = f.area();
+    f.render_widget(UiBlock::default().style(theme.base), area);
     let inner_w = area.width.saturating_sub(2) as usize;
     let (rows, cursor) = state.editor.layout(inner_w.saturating_sub(2).max(2));
     let prompt_h = (rows.len().min(8) as u16) + 2;
@@ -112,7 +115,7 @@ pub fn draw(f: &mut Frame, state: &mut AppState, theme: &Theme) {
         .map(|r| Line::from(vec![Span::styled("┃ ", theme.accent), Span::styled(r.clone(), theme.text)]))
         .collect();
     f.render_widget(Paragraph::new(shown).block(blk), prompt);
-    if state.popup.is_none() {
+    if state.popup.is_none() && state.theme_popup.is_none() && state.perm.is_empty() {
         f.set_cursor_position((p_inner.x + 2 + cursor.1 as u16, p_inner.y + (cursor.0 - skip) as u16));
     }
 
@@ -138,6 +141,7 @@ pub fn draw(f: &mut Frame, state: &mut AppState, theme: &Theme) {
         let blk = UiBlock::default()
             .borders(Borders::ALL)
             .border_style(theme.accent)
+            .style(theme.panel)
             .title(" Sessions (Enter select, Esc close) ");
         let inner = blk.inner(r);
         let vis = inner.height as usize;
@@ -162,6 +166,36 @@ pub fn draw(f: &mut Frame, state: &mut AppState, theme: &Theme) {
         };
         f.render_widget(Paragraph::new(items).block(blk), r);
     }
+
+    // Theme picker
+    if let Some(p) = &state.theme_popup {
+        let pw = 40u16.min(area.width);
+        let ph = ((p.names.len() as u16) + 2).min(area.height.saturating_sub(2).max(3)).min(area.height);
+        let r = Rect { x: area.x + area.width.saturating_sub(pw) / 2, y: area.y + area.height.saturating_sub(ph) / 2, width: pw, height: ph };
+        f.render_widget(Clear, r);
+        let blk = UiBlock::default()
+            .borders(Borders::ALL)
+            .border_style(theme.accent)
+            .style(theme.panel)
+            .title(" Themes (Enter select, Esc cancel) ");
+        let vis = blk.inner(r).height as usize;
+        let start = (p.selected + 1).saturating_sub(vis);
+        let items: Vec<Line> = p
+            .names
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(vis)
+            .map(|(i, n)| {
+                let st = if i == p.selected { theme.selected } else { theme.text };
+                Line::styled(format!(" {n}"), st)
+            })
+            .collect();
+        f.render_widget(Paragraph::new(items).block(blk), r);
+    }
+
+    // Permission dialog (topmost)
+    draw_dialog(f, area, &state.perm, theme);
 }
 
 #[cfg(test)]

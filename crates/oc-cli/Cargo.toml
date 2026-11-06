@@ -15,8 +15,13 @@ oc-server.workspace = true
 oc-ext.workspace = true
 oc-lsp.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
 clap.workspace = true
 tokio.workspace = true
 serde_json.workspace = true
+rpassword = "7"
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -18,7 +18,9 @@ tracing.workspace = true
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = "0.7"
+uuid.workspace = true
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+tempfile = "3"

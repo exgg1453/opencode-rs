@@ -1,7 +1,8 @@
-//! Minimal Rust-side plugin hooks.
+//! In-process Rust plugins; a `PluginRegistry` is itself a `ToolHook`.
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use oc_core::ToolHook;
 use serde_json::Value;
 
 #[async_trait]
@@ -46,6 +47,18 @@ impl PluginRegistry {
             out = p.after_tool(tool, input, out).await;
         }
         out
+    }
+}
+
+#[async_trait]
+impl ToolHook for PluginRegistry {
+    async fn before_tool(&self, tool: &str, input: &mut Value) -> anyhow::Result<()> {
+        *input = PluginRegistry::before_tool(self, tool, input.clone()).await?;
+        Ok(())
+    }
+    async fn after_tool(&self, tool: &str, input: &Value, output: &mut String) -> anyhow::Result<()> {
+        *output = PluginRegistry::after_tool(self, tool, input, Ok(std::mem::take(output))).await?;
+        Ok(())
     }
 }
 

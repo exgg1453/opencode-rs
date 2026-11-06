@@ -10,3 +10,12 @@ async-trait.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tracing.workspace = true
+
+[[bin]]
+name = "fake_lsp"
+path = "src/bin/fake_lsp.rs"
+test = false
+
+[dev-dependencies]
+tempfile = "3"

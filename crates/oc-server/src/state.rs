@@ -23,18 +23,32 @@ pub struct AppState {
     pub repo: Arc<dyn SessionRepo>,
     pub runner: Arc<dyn TurnRunner>,
     pub events: broadcast::Sender<SessionEvent>,
+    pub permissions: crate::handlers::permission::PermissionBroker,
+    pub shares: Arc<crate::share_store::ShareStore>,
     running: Arc<Mutex<HashMap<String, CancellationToken>>>,
 }
 
 impl AppState {
     pub fn new(repo: Arc<dyn SessionRepo>, runner: Arc<dyn TurnRunner>) -> Self {
         let (events, _) = broadcast::channel(1024);
-        AppState { repo, runner, events, running: Default::default() }
+        AppState { repo, runner, events, permissions: Default::default(), shares: Arc::new(crate::share_store::ShareStore::default_dir()), running: Default::default() }
+    }
+
+    /// Use a specific directory for shared session snapshots.
+    pub fn with_share_dir(mut self, dir: std::path::PathBuf) -> Self {
+        self.shares = Arc::new(crate::share_store::ShareStore::new(dir));
+        self
     }
 
     /// Build state from a real agent (any `Provider`, including mocks) and store.
     pub fn from_agent(agent: Agent, store: SessionStore) -> Self {
         Self::new(Arc::new(store), Arc::new(agent))
+    }
+
+    /// Use this broker (the one wired into the agent's `RulePermission`) for permission prompts.
+    pub fn with_permissions(mut self, permissions: crate::handlers::permission::PermissionBroker) -> Self {
+        self.permissions = permissions;
+        self
     }
 
     /// Claim the single turn slot of a session; `Busy` if already taken.

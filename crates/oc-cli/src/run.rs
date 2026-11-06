@@ -3,10 +3,14 @@
 use std::io::{IsTerminal, Read, Write};
 
 use anyhow::{bail, Result};
-use oc_core::{Agent, AgentEvent, Session, SessionStore};
+use std::sync::Arc;
+
+use oc_core::permission::{AllowAll, Asker, DenyAll, RulePermission};
+use oc_core::{Agent, AgentEvent, Config, Session, SessionStore};
 use tokio::sync::mpsc;
 
 use crate::cli::{OutputFormat, RunArgs};
+use crate::prompt::{TtyAsker, NON_INTERACTIVE_REASON};
 use crate::format::{format_event, format_json, Sink};
 
 /// Build the prompt from args, falling back to stdin.
@@ -25,12 +29,27 @@ fn read_stdin() -> String {
     s
 }
 
+/// Wire `RulePermission` into the agent with the right asker for this run.
+fn install_permissions(agent: &mut Agent, args: &RunArgs, cwd: &std::path::Path, interactive: bool) {
+    let config = Config::load(cwd).unwrap_or_default();
+    let asker: Arc<dyn Asker> = if args.yes {
+        Arc::new(AllowAll)
+    } else if interactive {
+        Arc::new(TtyAsker::new())
+    } else {
+        Arc::new(DenyAll(NON_INTERACTIVE_REASON.to_string()))
+    };
+    agent.hooks.permission = Some(Arc::new(RulePermission::new(&config, asker).with_cwd(cwd)));
+}
+
 /// Returns true if the run succeeded.
-pub async fn run(agent: Agent, store: SessionStore, args: RunArgs, cwd: std::path::PathBuf) -> Result<bool> {
+pub async fn run(mut agent: Agent, store: SessionStore, args: RunArgs, cwd: std::path::PathBuf) -> Result<bool> {
     let message = join_message(&args.message, read_stdin, std::io::stdin().is_terminal());
     if message.is_empty() {
         bail!("no message provided");
     }
+
+    install_permissions(&mut agent, &args, &cwd, std::io::stdin().is_terminal());
 
     let mut session = if let Some(id) = &args.session {
         store.load(id)?

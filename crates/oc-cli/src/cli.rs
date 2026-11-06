@@ -30,6 +30,17 @@ pub enum Command {
     Sessions,
     /// List known providers and models
     Models,
+    /// Manage stored provider credentials
+    #[command(subcommand)]
+    Auth(crate::account::AuthCommand),
+    /// Share a session and print its URL
+    Share(crate::account::IdArgs),
+    /// Stop sharing a session
+    Unshare(crate::account::IdArgs),
+    /// Export a session to stdout
+    Export(crate::account::ExportArgs),
+    /// Import a session from a JSON file
+    Import(crate::account::ImportArgs),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -51,6 +62,9 @@ pub struct RunArgs {
     /// Continue the most recent session
     #[arg(short = 'c', long = "continue")]
     pub continue_last: bool,
+    /// Auto-approve every permission prompt (deny rules still apply)
+    #[arg(short = 'y', long = "yes", visible_alias = "dangerously-skip-permissions")]
+    pub yes: bool,
 }
 
 #[derive(Debug, Args)]
@@ -119,5 +133,19 @@ mod tests {
     #[test]
     fn bad_format_rejected() {
         assert!(Cli::try_parse_from(["opencode", "run", "--format", "xml", "x"]).is_err());
+    }
+
+    #[test]
+    fn yes_flag_and_alias() {
+        for flag in ["--yes", "-y", "--dangerously-skip-permissions"] {
+            match p(&["run", flag, "hi"]).command {
+                Some(Command::Run(a)) => assert!(a.yes, "{flag}"),
+                _ => panic!("not run"),
+            }
+        }
+        match p(&["run", "hi"]).command {
+            Some(Command::Run(a)) => assert!(!a.yes),
+            _ => panic!("not run"),
+        }
     }
 }

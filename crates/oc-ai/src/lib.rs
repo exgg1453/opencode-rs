@@ -8,6 +8,8 @@ use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
 pub mod anthropic;
+pub mod google;
+pub mod http;
 pub mod openai;
 pub mod registry;
 pub mod sse;
@@ -15,7 +17,9 @@ pub mod sse;
 pub use registry::{build_provider, ProviderOptions};
 
 pub use anthropic::AnthropicProvider;
+pub use google::GoogleProvider;
 pub use openai::OpenAiProvider;
+pub use registry::{known_providers, ProviderInfo};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

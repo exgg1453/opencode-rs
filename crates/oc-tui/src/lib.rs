@@ -4,6 +4,7 @@
 
 pub mod input;
 pub mod markdown;
+pub mod perm;
 pub mod state;
 pub mod theme;
 pub mod view;
@@ -26,17 +27,19 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::input::{handle_key, Action};
-use crate::state::{AppState, Block, SessionPopup};
-use crate::theme::Theme;
+use crate::perm::{AskMsg, ChannelAsker};
+use crate::state::{AppState, Block, SessionPopup, ThemePopup};
+use crate::theme::{Mode, Theme, ThemeCatalog};
 
 type Term = Terminal<CrosstermBackend<Stdout>>;
 
 enum Msg {
     Agent(u64, AgentEvent),
     Finished(u64, Option<String>),
+    Info(String),
 }
 
-const HELP: &str = "Commands: /new  /sessions  /help  /exit\n\
+const HELP: &str = "Commands: /new  /sessions  /theme [name]  /share  /unshare  /help  /exit\n\
 Keys: Enter send | Shift+Enter or Alt+Enter newline | PgUp/PgDn or mouse wheel scroll | \
 Esc interrupt | Ctrl+O expand tool output | Ctrl+N new session | Ctrl+L sessions | Ctrl+C quit";
 
@@ -46,13 +49,29 @@ struct App {
     store: Arc<SessionStore>,
     state: AppState,
     theme: Theme,
+    catalog: ThemeCatalog,
+    mode: Mode,
+    config: oc_core::Config,
     tx: UnboundedSender<Msg>,
     turn: u64,
     task: Option<JoinHandle<()>>,
 }
 
 impl App {
-    fn new(agent: Agent, session: Session, store: SessionStore, tx: UnboundedSender<Msg>) -> App {
+    fn new(
+        mut agent: Agent,
+        session: Session,
+        store: SessionStore,
+        tx: UnboundedSender<Msg>,
+        perm_tx: UnboundedSender<AskMsg>,
+    ) -> App {
+        let config = oc_core::Config::load(&session.cwd).unwrap_or_default();
+        let catalog = ThemeCatalog::load(&session.cwd);
+        let mode = Mode::detect();
+        let wanted = theme::load_saved_theme().or_else(|| config.theme.clone()).unwrap_or_else(|| theme::DEFAULT_THEME.into());
+        let theme = catalog.get_or_default(&wanted, mode);
+        agent.hooks.permission =
+            Some(Arc::new(oc_core::permission::RulePermission::new(&config, Arc::new(ChannelAsker::new(perm_tx)))));
         let mut state = AppState::new(agent.model.clone(), session.cwd.display().to_string(), session.title.clone());
         state.load_session(&session);
         App {
@@ -60,7 +79,10 @@ impl App {
             session: Arc::new(Mutex::new(session)),
             store: Arc::new(store),
             state,
-            theme: Theme::default(),
+            theme,
+            catalog,
+            mode,
+            config,
             tx,
             turn: 0,
             task: None,
@@ -74,9 +96,10 @@ impl App {
             return;
         }
         if let Some(cmd) = text.strip_prefix('/') {
-            if !cmd.contains(char::is_whitespace) {
+            let (name, arg) = cmd.split_once(char::is_whitespace).map(|(n, a)| (n, a.trim())).unwrap_or((cmd, ""));
+            if arg.is_empty() || matches!(name, "theme") {
                 self.state.editor.clear();
-                self.command(cmd);
+                self.command(name, arg);
                 return;
             }
         }
@@ -113,8 +136,93 @@ impl App {
         }));
     }
 
-    fn command(&mut self, cmd: &str) {
+    fn set_theme(&mut self, name: &str) -> bool {
+        match self.catalog.get(name, self.mode) {
+            Ok(t) => {
+                self.theme = t;
+                true
+            }
+            Err(e) => {
+                self.state.blocks.push(Block::Error(format!("theme {name}: {e:#}")));
+                false
+            }
+        }
+    }
+
+    fn open_theme_picker(&mut self) {
+        let names = self.catalog.names();
+        let selected = names.iter().position(|n| *n == self.theme.name).unwrap_or(0);
+        self.state.theme_popup = Some(ThemePopup { names, selected, original: self.theme.name.clone() });
+    }
+
+    fn theme_popup_key(&mut self, key: KeyEvent) {
+        let Some(p) = self.state.theme_popup.as_mut() else { return };
+        let before = p.selected;
+        match key.code {
+            KeyCode::Up => p.selected = p.selected.saturating_sub(1),
+            KeyCode::Down => p.selected = (p.selected + 1).min(p.names.len().saturating_sub(1)),
+            KeyCode::Esc => {
+                let orig = p.original.clone();
+                self.state.theme_popup = None;
+                self.theme = self.catalog.get_or_default(&orig, self.mode);
+                return;
+            }
+            KeyCode::Enter => {
+                let name = p.names.get(p.selected).cloned();
+                self.state.theme_popup = None;
+                if let Some(n) = name {
+                    if self.set_theme(&n) {
+                        theme::save_theme(&n);
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
+        if p.selected != before {
+            let name = p.names[p.selected].clone();
+            if let Ok(t) = self.catalog.get(&name, self.mode) {
+                self.theme = t;
+            }
+        }
+    }
+
+    fn share(&mut self, unshare: bool) {
+        let (session, store, config, tx) = (self.session.clone(), self.store.clone(), self.config.clone(), self.tx.clone());
+        self.state.blocks.push(Block::Info(if unshare { "Unsharing session…" } else { "Sharing session…" }.into()));
+        tokio::spawn(async move {
+            let snapshot = session.lock().await.clone();
+            let _ = store.save(&snapshot);
+            let msg = if unshare {
+                match oc_core::share::unshare_session(&config, &snapshot.id).await {
+                    Ok(()) => "Session unshared.".to_string(),
+                    Err(e) => format!("Unshare failed: {e:#}"),
+                }
+            } else {
+                match oc_core::share::share_session(&config, &snapshot).await {
+                    Ok(url) => format!("Shared: {url}"),
+                    Err(e) => format!("Share failed: {e:#}"),
+                }
+            };
+            let _ = tx.send(Msg::Info(msg));
+        });
+    }
+
+    fn command(&mut self, cmd: &str, arg: &str) {
         match cmd {
+            "theme" if arg.is_empty() => self.open_theme_picker(),
+            "theme" => {
+                if self.catalog.names().iter().any(|n| n == arg) {
+                    if self.set_theme(arg) {
+                        theme::save_theme(arg);
+                        self.state.blocks.push(Block::Info(format!("Theme: {arg}")));
+                    }
+                } else {
+                    self.state.blocks.push(Block::Error(format!("Unknown theme {arg}. Use /theme to pick one.")));
+                }
+            }
+            "share" => self.share(false),
+            "unshare" => self.share(true),
             "new" => self.new_session(),
             "sessions" => self.open_sessions(),
             "help" => self.state.blocks.push(Block::Info(HELP.into())),
@@ -131,6 +239,7 @@ impl App {
             t.abort();
         }
         self.turn += 1; // ignore stale events
+        self.state.perm.clear();
         self.state.busy = false;
         self.state.blocks.push(Block::Info("Interrupted.".into()));
         let (session, store) = (self.session.clone(), self.store.clone());
@@ -185,6 +294,15 @@ impl App {
     fn on_event(&mut self, ev: Event) {
         match ev {
             Event::Key(key) => {
+                if self.state.perm.handle_key(key) {
+                    return;
+                }
+                if self.state.theme_popup.is_some() {
+                    if key.kind != event::KeyEventKind::Release {
+                        self.theme_popup_key(key);
+                    }
+                    return;
+                }
                 if self.state.popup.is_some() {
                     if key.kind != event::KeyEventKind::Release {
                         self.popup_key(key);
@@ -219,7 +337,9 @@ impl App {
                 self.state.title = self.session.try_lock().map(|s| s.title.clone()).unwrap_or_else(|_| self.state.title.clone());
                 self.state.apply(ev);
             }
+            Msg::Info(s) => self.state.blocks.push(Block::Info(s)),
             Msg::Finished(t, err) if t == self.turn => {
+                self.state.perm.clear();
                 if let Some(e) = err {
                     self.state.blocks.push(Block::Error(e));
                 }
@@ -288,7 +408,8 @@ pub async fn run(agent: Agent, session: Session, store: SessionStore) -> anyhow:
     let _guard = TermGuard;
 
     let (tx, mut rx) = unbounded_channel::<Msg>();
-    let mut app = App::new(agent, session, store, tx);
+    let (perm_tx, mut perm_rx) = unbounded_channel::<AskMsg>();
+    let mut app = App::new(agent, session, store, tx, perm_tx);
     let mut input = spawn_input_thread();
     let mut ticker = tokio::time::interval(Duration::from_millis(100));
 
@@ -303,7 +424,11 @@ pub async fn run(agent: Agent, session: Session, store: SessionStore) -> anyhow:
                 }
             }
             Some(m) = rx.recv() => app.on_msg(m),
-            _ = ticker.tick() => app.state.tick = app.state.tick.wrapping_add(1),
+            Some(m) = perm_rx.recv() => app.state.perm.push(m),
+            _ = ticker.tick() => {
+                app.state.tick = app.state.tick.wrapping_add(1);
+                app.state.perm.prune_closed();
+            }
         }
     }
     if let Some(t) = app.task.take() {

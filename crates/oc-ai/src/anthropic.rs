@@ -14,6 +14,7 @@ pub struct AnthropicProvider {
     api_key: String,
     base_url: String,
     client: reqwest::Client,
+    backoff: std::time::Duration,
 }
 
 impl AnthropicProvider {
@@ -22,7 +23,13 @@ impl AnthropicProvider {
             api_key: api_key.into(),
             base_url: "https://api.anthropic.com".into(),
             client: reqwest::Client::new(),
+            backoff: crate::http::DEFAULT_BACKOFF,
         }
+    }
+
+    pub fn with_backoff(mut self, d: std::time::Duration) -> Self {
+        self.backoff = d;
+        self
     }
 
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
@@ -186,21 +193,17 @@ impl Provider for AnthropicProvider {
     }
 
     async fn stream(&self, req: ChatRequest) -> anyhow::Result<BoxStream<'static, anyhow::Result<StreamEvent>>> {
-        let resp = self
-            .client
-            .post(format!("{}/v1/messages", self.base_url))
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&build_body(&req))
-            .send()
-            .await
-            .context("anthropic request failed")?;
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("anthropic API error {status}: {text}"));
-        }
+        let body = build_body(&req);
+        let url = format!("{}/v1/messages", self.base_url);
+        let resp = crate::http::send_with_retry("anthropic", self.backoff, || {
+            self.client
+                .post(&url)
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .json(&body)
+        })
+        .await?;
         let bytes = resp.bytes_stream().map(|r| r.map(|b| b.to_vec()).map_err(anyhow::Error::from)).boxed();
         Ok(drive(bytes, AnthropicProcessor::default()))
     }
