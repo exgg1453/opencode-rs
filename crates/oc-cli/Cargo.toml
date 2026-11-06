@@ -1,0 +1,19 @@
+[package]
+name = "oc-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "opencode"
+path = "src/main.rs"
+
+[dependencies]
+oc-ai.workspace = true
+oc-core.workspace = true
+oc-tui.workspace = true
+oc-server.workspace = true
+oc-ext.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+serde_json.workspace = true

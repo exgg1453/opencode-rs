@@ -1,0 +1,14 @@
+[package]
+name = "oc-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+oc-ai.workspace = true
+oc-core.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
