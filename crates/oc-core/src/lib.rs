@@ -8,56 +8,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use oc_ai::{ChatMessage, Provider};
+use oc_ai::Provider;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::UnboundedSender;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Config {
-    /// "provider/model", e.g. "anthropic/claude-sonnet-5-5".
-    pub model: Option<String>,
-    #[serde(default)]
-    pub mcp: serde_json::Map<String, serde_json::Value>,
-}
+mod agent;
+mod config;
+mod prompt;
+mod session;
+pub mod tools;
 
-impl Config {
-    /// Load from global (~/.config/opencode/opencode.json) and project (./opencode.json) files.
-    pub fn load(_cwd: &std::path::Path) -> anyhow::Result<Config> {
-        todo!("phase 1")
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Session {
-    pub id: String,
-    pub title: String,
-    pub cwd: PathBuf,
-    pub messages: Vec<ChatMessage>,
-}
-
-impl Session {
-    pub fn new(cwd: PathBuf) -> Session {
-        Session { id: uuid::Uuid::new_v4().to_string(), title: "New session".into(), cwd, messages: Vec::new() }
-    }
-}
-
-/// Persists sessions on disk (~/.local/share/opencode-rs/sessions/<id>.json).
-pub struct SessionStore;
-
-impl SessionStore {
-    pub fn open_default() -> anyhow::Result<SessionStore> {
-        todo!("phase 1")
-    }
-    pub fn save(&self, _s: &Session) -> anyhow::Result<()> {
-        todo!("phase 1")
-    }
-    pub fn load(&self, _id: &str) -> anyhow::Result<Session> {
-        todo!("phase 1")
-    }
-    pub fn list(&self) -> anyhow::Result<Vec<Session>> {
-        todo!("phase 1")
-    }
-}
+pub use agent::provider_from_model;
+pub use config::Config;
+pub use prompt::DEFAULT_SYSTEM_PROMPT;
+pub use session::{Session, SessionStore};
 
 /// Events emitted while the agent runs; consumed by CLI, TUI and server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,7 +53,7 @@ pub struct ToolRegistry {
 impl ToolRegistry {
     /// Built-in tools: read, write, edit, bash, grep, glob, list.
     pub fn builtin() -> ToolRegistry {
-        todo!("phase 1")
+        tools::builtin_tools()
     }
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
         self.tools.push(tool);
@@ -104,20 +67,5 @@ pub struct Agent {
     pub system_prompt: String,
 }
 
-impl Agent {
-    /// Runs the model/tool loop for one user prompt, appending to `session.messages`
-    /// and streaming progress to `events`. Ends with `AgentEvent::Done` or `Error`.
-    pub async fn prompt(
-        &self,
-        _session: &mut Session,
-        _input: String,
-        _events: UnboundedSender<AgentEvent>,
-    ) -> anyhow::Result<()> {
-        todo!("phase 1")
-    }
-}
-
-/// Builds a provider from "provider/model" using env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY).
-pub fn provider_from_model(_model: &str) -> anyhow::Result<(Arc<dyn Provider>, String)> {
-    todo!("phase 1")
-}
+#[cfg(test)]
+mod tests;

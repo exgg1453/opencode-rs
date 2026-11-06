@@ -11,3 +11,5 @@ tokio.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 serde_json.workspace = true
+unicode-width = "0.2"
+

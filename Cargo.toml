@@ -7,6 +7,13 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
+# Keep target/ small: the build machine is short on disk.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [workspace.dependencies]
 oc-ai = { path = "crates/oc-ai" }
 oc-core = { path = "crates/oc-core" }

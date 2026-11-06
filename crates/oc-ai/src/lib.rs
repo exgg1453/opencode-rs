@@ -7,6 +7,13 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
+pub mod anthropic;
+pub mod openai;
+pub mod sse;
+
+pub use anthropic::AnthropicProvider;
+pub use openai::OpenAiProvider;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
