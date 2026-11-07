@@ -75,8 +75,18 @@ impl SseParser {
 /// Turns SSE events into provider-neutral stream events.
 pub trait EventProcessor: Send + 'static {
     fn process(&mut self, ev: &SseEvent) -> anyhow::Result<Vec<StreamEvent>>;
-    /// Called when the byte stream ends.
-    fn finish(&mut self) -> Vec<StreamEvent>;
+    /// Called when the byte stream ends. A stream that closes before the provider's
+    /// end-of-response marker was cut off and must return [`truncated`].
+    fn finish(&mut self) -> anyhow::Result<Vec<StreamEvent>>;
+}
+
+/// The connection closed cleanly but the response never finished. Retryable, like a reset.
+pub fn truncated(provider: &str) -> anyhow::Error {
+    anyhow::Error::new(crate::ProviderError::new(
+        None,
+        true,
+        format!("{provider} stream ended before the response finished"),
+    ))
 }
 
 struct State<S, P> {
@@ -130,8 +140,10 @@ where
                             }
                         }
                     }
-                    let fin = st.proc.finish();
-                    st.pending.extend(fin.into_iter().map(Ok));
+                    match st.proc.finish() {
+                        Ok(v) => st.pending.extend(v.into_iter().map(Ok)),
+                        Err(e) => st.pending.push_back(Err(e)),
+                    }
                 }
             }
         }

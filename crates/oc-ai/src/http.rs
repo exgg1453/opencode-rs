@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use anyhow::{anyhow, Context};
+use crate::ProviderError;
 
 /// Maximum number of retries (after the first attempt) for 429/5xx responses.
 pub const MAX_RETRIES: u32 = 3;
@@ -10,7 +10,37 @@ pub const MAX_RETRIES: u32 = 3;
 pub const DEFAULT_BACKOFF: Duration = Duration::from_millis(500);
 
 pub fn is_retryable(status: reqwest::StatusCode) -> bool {
-    status.as_u16() == 429 || status.is_server_error()
+    ProviderError::status_retryable(status.as_u16())
+}
+
+fn error_chain(e: &dyn std::error::Error) -> String {
+    let mut s = e.to_string();
+    let mut src = e.source();
+    while let Some(c) = src {
+        let t = c.to_string();
+        if !s.contains(&t) {
+            s.push_str(": ");
+            s.push_str(&t);
+        }
+        src = c.source();
+    }
+    s
+}
+
+/// Classify a transport error from `send()`: connection problems and timeouts are retryable.
+pub fn request_error(provider: &str, e: &reqwest::Error) -> anyhow::Error {
+    let retryable = !e.is_builder() && !e.is_redirect();
+    anyhow::Error::new(ProviderError::new(
+        e.status().map(|s| s.as_u16()),
+        retryable,
+        format!("{provider} request failed: {}", error_chain(e)),
+    ))
+}
+
+/// Classify an error raised while reading the response body: always worth a retry,
+/// since the response had already started (connection reset, decode error, timeout).
+pub fn stream_error(provider: &str, e: reqwest::Error) -> anyhow::Error {
+    anyhow::Error::new(ProviderError::new(None, true, format!("{provider} stream interrupted: {}", error_chain(&e))))
 }
 
 /// Extract the human-readable message from a provider error body, if any.
@@ -55,11 +85,12 @@ pub fn format_api_error(provider: &str, status: reqwest::StatusCode, body: &str)
         429 => " (rate limited or quota exceeded)",
         _ => "",
     };
-    if msg.is_empty() {
-        anyhow!("{provider} API error {status}{hint}")
+    let message = if msg.is_empty() {
+        format!("{provider} API error {status}{hint}")
     } else {
-        anyhow!("{provider} API error {status}{hint}: {msg}")
-    }
+        format!("{provider} API error {status}{hint}: {msg}")
+    };
+    anyhow::Error::new(ProviderError::new(Some(status.as_u16()), is_retryable(status), message))
 }
 
 fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
@@ -97,7 +128,7 @@ where
                     tokio::time::sleep(delay).await;
                     continue;
                 }
-                return Err(e).with_context(|| format!("{provider} request failed"));
+                return Err(request_error(provider, &e));
             }
         }
     }
@@ -168,6 +199,16 @@ mod tests {
     use super::testutil::mock;
     use super::*;
     use std::sync::atomic::Ordering;
+
+    #[test]
+    fn api_errors_are_classified() {
+        for (code, retry) in [(429u16, true), (500, true), (503, true), (529, true), (400, false), (401, false), (403, false), (404, false)] {
+            let e = format_api_error("t", reqwest::StatusCode::from_u16(code).unwrap(), "{}");
+            let p = e.downcast_ref::<ProviderError>().unwrap();
+            assert_eq!((p.status, p.retryable), (Some(code), retry), "{code}");
+            assert_eq!(crate::is_retryable(&e), retry);
+        }
+    }
 
     #[test]
     fn extracts_messages() {

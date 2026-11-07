@@ -32,6 +32,11 @@ pub use session::{Session, SessionStore};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
     TextDelta { text: String },
+    /// Incremental model reasoning for the current step.
+    ThinkingDelta { text: String },
+    /// The current step's stream failed with a retryable error; its partial output is
+    /// discarded and the step restarts after a backoff.
+    Retry { attempt: u32, max: u32, reason: String },
     ToolStart { id: String, name: String, input: serde_json::Value },
     ToolEnd { id: String, output: String, is_error: bool },
     Done,
@@ -71,6 +76,8 @@ pub struct Agent {
     pub tools: ToolRegistry,
     pub system_prompt: String,
     pub hooks: AgentHooks,
+    /// Reasoning effort sent with every request; `None` disables thinking.
+    pub thinking: Option<oc_ai::ThinkingLevel>,
 }
 
 #[cfg(test)]

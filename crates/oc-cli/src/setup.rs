@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use oc_core::{Agent, AgentHooks, Config, ToolRegistry};
 
-use crate::cli::DEFAULT_MODEL;
+use crate::cli::{ThinkingArg, DEFAULT_MODEL};
 
 pub const SYSTEM_PROMPT: &str = "You are OpenCode, an interactive AI coding agent running in the user's terminal. \
 Help with software engineering tasks: read and search the codebase, edit files, run commands, and explain your work concisely. \
@@ -18,6 +18,14 @@ pub fn resolve_model(flag: Option<&str>, config: &Config) -> String {
         .unwrap_or_else(|| DEFAULT_MODEL.to_string())
 }
 
+/// Thinking precedence: CLI flag, then config (unset means off).
+pub fn resolve_thinking(flag: Option<ThinkingArg>, config: &Config) -> Result<Option<oc_ai::ThinkingLevel>> {
+    match flag {
+        Some(f) => Ok(f.level()),
+        None => config.thinking_level(),
+    }
+}
+
 pub fn resolve_cwd(cwd: Option<PathBuf>) -> Result<PathBuf> {
     let p = match cwd {
         Some(p) => p,
@@ -26,8 +34,9 @@ pub fn resolve_cwd(cwd: Option<PathBuf>) -> Result<PathBuf> {
     Ok(std::fs::canonicalize(&p).unwrap_or(p))
 }
 
-pub async fn build_agent(model_flag: Option<&str>, cwd: &std::path::Path) -> Result<Agent> {
+pub async fn build_agent(model_flag: Option<&str>, thinking_flag: Option<ThinkingArg>, cwd: &std::path::Path) -> Result<Agent> {
     let config = Config::load(cwd)?;
+    let thinking = resolve_thinking(thinking_flag, &config)?;
     let model = resolve_model(model_flag, &config);
     let (provider, model_id) = oc_core::provider_from_config(&model, &config)?;
     let mut tools = ToolRegistry::builtin();
@@ -42,7 +51,7 @@ pub async fn build_agent(model_flag: Option<&str>, cwd: &std::path::Path) -> Res
     }
     hooks.diagnostics = oc_lsp::start(&config, cwd).await;
     // The permission handler depends on the front end (TUI, run, serve) and is set by the caller.
-    Ok(Agent { provider, model: model_id, tools, system_prompt: SYSTEM_PROMPT.to_string(), hooks })
+    Ok(Agent { provider, model: model_id, tools, system_prompt: SYSTEM_PROMPT.to_string(), hooks, thinking })
 }
 
 #[cfg(test)]
@@ -56,5 +65,19 @@ mod tests {
         c.model = Some("openai/x".into());
         assert_eq!(resolve_model(None, &c), "openai/x");
         assert_eq!(resolve_model(Some("a/b"), &c), "a/b");
+    }
+
+    #[test]
+    fn thinking_precedence() {
+        use oc_ai::ThinkingLevel::*;
+        let mut c = Config::default();
+        assert_eq!(resolve_thinking(None, &c).unwrap(), None);
+        c.thinking = Some("medium".into());
+        assert_eq!(resolve_thinking(None, &c).unwrap(), Some(Medium));
+        assert_eq!(resolve_thinking(Some(ThinkingArg::High), &c).unwrap(), Some(High));
+        assert_eq!(resolve_thinking(Some(ThinkingArg::Off), &c).unwrap(), None);
+        c.thinking = Some("nope".into());
+        assert!(resolve_thinking(None, &c).is_err());
+        assert_eq!(resolve_thinking(Some(ThinkingArg::Low), &c).unwrap(), Some(Low));
     }
 }

@@ -39,9 +39,9 @@ enum Msg {
     Info(String),
 }
 
-const HELP: &str = "Commands: /new  /sessions  /theme [name]  /share  /unshare  /help  /exit\n\
+const HELP: &str = "Commands: /new  /sessions  /theme [name]  /thinking [off|low|medium|high]  /share  /unshare  /help  /exit\n\
 Keys: Enter send | Shift+Enter or Alt+Enter newline | PgUp/PgDn or mouse wheel scroll | \
-Esc interrupt | Ctrl+O expand tool output | Ctrl+N new session | Ctrl+L sessions | Ctrl+C quit";
+Esc interrupt | Ctrl+O expand tool output | Ctrl+T expand/collapse thinking | Ctrl+N new session | Ctrl+L sessions | Ctrl+C quit";
 
 struct App {
     agent: Arc<Agent>,
@@ -74,6 +74,7 @@ impl App {
             Some(Arc::new(oc_core::permission::RulePermission::new(&config, Arc::new(ChannelAsker::new(perm_tx)))));
         let mut state = AppState::new(agent.model.clone(), session.cwd.display().to_string(), session.title.clone());
         state.load_session(&session);
+        state.thinking = agent.thinking;
         App {
             agent: Arc::new(agent),
             session: Arc::new(Mutex::new(session)),
@@ -97,7 +98,7 @@ impl App {
         }
         if let Some(cmd) = text.strip_prefix('/') {
             let (name, arg) = cmd.split_once(char::is_whitespace).map(|(n, a)| (n, a.trim())).unwrap_or((cmd, ""));
-            if arg.is_empty() || matches!(name, "theme") {
+            if arg.is_empty() || matches!(name, "theme" | "thinking") {
                 self.state.editor.clear();
                 self.command(name, arg);
                 return;
@@ -187,6 +188,33 @@ impl App {
         }
     }
 
+    /// `/thinking [level]`: shows or changes the level used from the next turn on. The agent is
+    /// shared with a running turn, so it is rebuilt rather than mutated; the running turn
+    /// keeps the old one.
+    fn set_thinking(&mut self, arg: &str) {
+        if arg.is_empty() {
+            let cur = self.state.thinking.map_or("off", |l| l.as_str());
+            self.state.blocks.push(Block::Info(format!("Thinking: {cur}. Use /thinking off|low|medium|high.")));
+            return;
+        }
+        match oc_ai::ThinkingLevel::parse_setting(arg) {
+            Ok(level) => {
+                let a = &self.agent;
+                self.agent = Arc::new(Agent {
+                    provider: a.provider.clone(),
+                    model: a.model.clone(),
+                    tools: a.tools.clone(),
+                    system_prompt: a.system_prompt.clone(),
+                    hooks: a.hooks.clone(),
+                    thinking: level,
+                });
+                self.state.thinking = level;
+                self.state.blocks.push(Block::Info(format!("Thinking: {}", level.map_or("off", |l| l.as_str()))));
+            }
+            Err(e) => self.state.blocks.push(Block::Error(e)),
+        }
+    }
+
     fn share(&mut self, unshare: bool) {
         let (session, store, config, tx) = (self.session.clone(), self.store.clone(), self.config.clone(), self.tx.clone());
         self.state.blocks.push(Block::Info(if unshare { "Unsharing session…" } else { "Sharing session…" }.into()));
@@ -221,6 +249,7 @@ impl App {
                     self.state.blocks.push(Block::Error(format!("Unknown theme {arg}. Use /theme to pick one.")));
                 }
             }
+            "thinking" => self.set_thinking(arg),
             "share" => self.share(false),
             "unshare" => self.share(true),
             "new" => self.new_session(),
@@ -318,6 +347,7 @@ impl App {
                     Action::ScrollUp(n) => self.state.scroll = self.state.scroll.saturating_add(n),
                     Action::ScrollDown(n) => self.state.scroll = self.state.scroll.saturating_sub(n),
                     Action::ToggleTools => self.state.expand_tools = !self.state.expand_tools,
+                    Action::ToggleThinking => self.state.toggle_thinking(),
                     Action::Newline | Action::Edit | Action::None => {}
                 }
             }

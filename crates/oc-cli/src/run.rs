@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 
 use crate::cli::{OutputFormat, RunArgs};
 use crate::prompt::{TtyAsker, NON_INTERACTIVE_REASON};
-use crate::format::{format_event, format_json, Sink};
+use crate::format::{format_json, Printer, Sink};
 
 /// Build the prompt from args, falling back to stdin.
 pub fn join_message(parts: &[String], stdin_text: impl FnOnce() -> String, stdin_is_tty: bool) -> String {
@@ -64,8 +64,10 @@ pub async fn run(mut agent: Agent, store: SessionStore, args: RunArgs, cwd: std:
 
     let json = args.format == OutputFormat::Json;
     let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
+    let hide_thinking = args.hide_thinking;
     let printer = tokio::spawn(async move {
         let mut failed = false;
+        let mut printer = Printer::new(hide_thinking);
         let mut out = std::io::stdout();
         let mut err = std::io::stderr();
         while let Some(ev) = rx.recv().await {
@@ -73,14 +75,18 @@ pub async fn run(mut agent: Agent, store: SessionStore, args: RunArgs, cwd: std:
                 failed = true;
             }
             if json {
-                let _ = writeln!(out, "{}", format_json(&ev));
-            } else if let Some((sink, text)) = format_event(&ev) {
-                match sink {
-                    Sink::Stdout => {
-                        let _ = write!(out, "{text}");
-                    }
-                    Sink::Stderr => {
-                        let _ = write!(err, "{text}");
+                if !(hide_thinking && matches!(ev, AgentEvent::ThinkingDelta { .. })) {
+                    let _ = writeln!(out, "{}", format_json(&ev));
+                }
+            } else {
+                for (sink, text) in printer.format(&ev) {
+                    match sink {
+                        Sink::Stdout => {
+                            let _ = write!(out, "{text}");
+                        }
+                        Sink::Stderr => {
+                            let _ = write!(err, "{text}");
+                        }
                     }
                 }
             }

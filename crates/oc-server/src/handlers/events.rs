@@ -36,3 +36,20 @@ pub async fn stream(State(state): State<AppState>) -> Sse<impl Stream<Item = Res
     });
     Sse::new(hello.chain(stream::select(live, asked))).keep_alive(KeepAlive::default())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oc_core::AgentEvent;
+
+    fn ev(event: AgentEvent) -> SessionEvent {
+        SessionEvent { session_id: "s".into(), event }
+    }
+
+    #[test]
+    fn thinking_and_retry_events_have_sse_names() {
+        assert_eq!(event_name(&ev(AgentEvent::ThinkingDelta { text: "t".into() })), "thinking_delta");
+        assert_eq!(event_name(&ev(AgentEvent::Retry { attempt: 1, max: 3, reason: "r".into() })), "retry");
+        assert_eq!(event_name(&ev(AgentEvent::TextDelta { text: "t".into() })), "text_delta");
+    }
+}

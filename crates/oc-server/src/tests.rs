@@ -236,7 +236,6 @@ async fn cors_headers_present() {
 /// Needs phase-1 `Agent::prompt` / `SessionStore` (currently `todo!()`), with an
 /// injected mock `oc_ai::Provider` via `AppState::from_agent`.
 #[tokio::test]
-#[ignore = "requires phase-1 oc-core implementation (todo!() stubs)"]
 async fn real_agent_with_mock_provider() {
     use futures::stream::{self, BoxStream};
     use oc_ai::{ChatRequest, Provider, StreamEvent};
@@ -259,6 +258,7 @@ async fn real_agent_with_mock_provider() {
         tools: oc_core::ToolRegistry::default(),
         system_prompt: String::new(),
         hooks: Default::default(),
+        thinking: None,
     };
     let store = oc_core::SessionStore::open_default().unwrap();
     let app = router(AppState::from_agent(agent, store));

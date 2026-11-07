@@ -24,6 +24,8 @@ pub struct Config {
     pub lsp: Option<serde_json::Value>,
     /// Base URL of the share server.
     pub share_url: Option<String>,
+    /// Model reasoning effort: "off", "low", "medium" or "high".
+    pub thinking: Option<String>,
 }
 
 pub(crate) fn home_dir() -> Option<PathBuf> {
@@ -62,6 +64,14 @@ impl Config {
         Ok(cfg)
     }
 
+    /// The configured thinking level (`None` when unset or "off").
+    pub fn thinking_level(&self) -> anyhow::Result<Option<oc_ai::ThinkingLevel>> {
+        match &self.thinking {
+            Some(s) => oc_ai::ThinkingLevel::parse_setting(s).map_err(|e| anyhow::anyhow!("config \"thinking\": {e}")),
+            None => Ok(None),
+        }
+    }
+
     fn merge(&mut self, other: Config) {
         if other.model.is_some() {
             self.model = other.model;
@@ -87,6 +97,9 @@ impl Config {
         if other.share_url.is_some() {
             self.share_url = other.share_url;
         }
+        if other.thinking.is_some() {
+            self.thinking = other.thinking;
+        }
     }
 }
 
@@ -106,6 +119,18 @@ mod tests {
         let c = Config::load(d.path()).unwrap();
         assert_eq!(c.model.as_deref(), Some("openai/x"));
         assert!(c.mcp.contains_key("a"));
+    }
+
+    #[test]
+    fn thinking_merges_and_parses() {
+        let mut a = Config { thinking: Some("low".into()), ..Default::default() };
+        assert_eq!(a.thinking_level().unwrap(), Some(oc_ai::ThinkingLevel::Low));
+        a.merge(Config::default());
+        assert_eq!(a.thinking.as_deref(), Some("low"));
+        a.merge(Config { thinking: Some("off".into()), ..Default::default() });
+        assert_eq!(a.thinking_level().unwrap(), None);
+        a.merge(Config { thinking: Some("bogus".into()), ..Default::default() });
+        assert!(a.thinking_level().is_err());
     }
 
     #[test]

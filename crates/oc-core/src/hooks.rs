@@ -60,4 +60,7 @@ pub struct AgentHooks {
     pub permission: Option<Arc<dyn PermissionHandler>>,
     pub tools: Vec<Arc<dyn ToolHook>>,
     pub diagnostics: Option<Arc<dyn DiagnosticsProvider>>,
+    /// Base delay for retrying a step whose stream dropped (doubles each attempt).
+    /// `None` means 1s; tests set it to zero.
+    pub retry_base_delay: Option<std::time::Duration>,
 }

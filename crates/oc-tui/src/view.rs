@@ -28,6 +28,19 @@ pub fn transcript_lines(state: &AppState, width: usize, theme: &Theme) -> Vec<Li
                 }
             }
             Block::Assistant(t) => out.extend(markdown_lines(t, w, theme)),
+            Block::Thinking(t) => {
+                let style = theme.muted.add_modifier(Modifier::ITALIC);
+                if state.expand_thinking {
+                    out.push(Line::styled("▾ Thinking", style));
+                    for l in t.trim_end().lines().flat_map(|l| wrap_text(l, w.saturating_sub(2))) {
+                        out.push(Line::styled(format!("  {l}"), style));
+                    }
+                } else {
+                    let first = t.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+                    let line = format!("▸ Thinking: {first}");
+                    out.push(Line::styled(format!("{}…", crate::state::truncate(&line, w.saturating_sub(1).max(1))), style));
+                }
+            }
             Block::Tool { name, summary, output, is_error, .. } => {
                 let (icon, istyle) = match (output, is_error) {
                     (None, _) => ("…", theme.muted),
@@ -121,8 +134,9 @@ pub fn draw(f: &mut Frame, state: &mut AppState, theme: &Theme) {
 
     // Status bar
     let spin = if state.busy { SPINNER[state.tick % SPINNER.len()] } else { " " };
-    let left = format!(" {spin} {} │ {} │ {}", state.model, state.cwd, state.title);
-    let right = "Ctrl+L sessions  Ctrl+N new  Ctrl+C quit ";
+    let think = state.thinking.map_or("off", |l| l.as_str());
+    let left = format!(" {spin} {} │ thinking: {think} │ {} │ {}", state.model, state.cwd, state.title);
+    let right = "Ctrl+T thinking  Ctrl+L sessions  Ctrl+C quit ";
     let pad = (status.width as usize).saturating_sub(left.chars().count() + right.chars().count());
     let text = format!("{left}{}{right}", " ".repeat(pad));
     f.render_widget(Paragraph::new(text).style(theme.status_bar), status);
@@ -245,6 +259,33 @@ mod tests {
         ] {
             assert!(out.contains(needle), "missing {needle:?} in:\n{out}");
         }
+    }
+
+    #[test]
+    fn thinking_collapsed_and_expanded() {
+        let theme = Theme::default();
+        let mut st = state();
+        st.thinking = Some(oc_ai::ThinkingLevel::Medium);
+        st.blocks.push(Block::Thinking("first idea\nsecond idea".into()));
+        st.blocks.push(Block::Assistant("the answer".into()));
+        let lines = |st: &AppState| -> Vec<String> {
+            transcript_lines(st, 60, &theme).iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect()
+        };
+        let l = lines(&st);
+        assert_eq!(l[0], "▸ Thinking: first idea…");
+        assert!(!l.iter().any(|x| x.contains("second idea")));
+        assert!(l.iter().any(|x| x.contains("the answer")));
+        st.toggle_thinking();
+        let l = lines(&st);
+        assert_eq!(l[0], "▾ Thinking");
+        assert_eq!(l[1], "  first idea");
+        assert_eq!(l[2], "  second idea");
+        // muted theme role, no hard-coded colour
+        let t = transcript_lines(&st, 60, &theme);
+        assert_eq!(t[1].style.fg, theme.muted.fg);
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        term.draw(|f| draw(f, &mut st, &theme)).unwrap();
+        assert!(dump(&term).contains("thinking: medium"));
     }
 
     #[test]

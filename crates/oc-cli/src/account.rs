@@ -182,6 +182,10 @@ pub fn to_markdown(s: &Session) -> String {
                     let label = if *is_error { "Tool error" } else { "Tool result" };
                     out.push_str(&format!("**{label}:**\n\n```\n{content}\n```\n\n"));
                 }
+                ContentBlock::Thinking { thinking, .. } => {
+                    out.push_str(&format!("> **Thinking:** {}\n\n", thinking.trim().replace('\n', "\n> ")));
+                }
+                ContentBlock::RedactedThinking { .. } => {}
             }
         }
     }

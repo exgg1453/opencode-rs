@@ -134,6 +134,8 @@ pub fn render(session: &Session) -> String {
                         escape(&pretty)
                     ));
                 }
+                // Reasoning is not published with shared sessions.
+                ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
                 ContentBlock::ToolResult { content, is_error, .. } => {
                     let label = if *is_error { "Tool error" } else { "Tool result" };
                     let cls = if *is_error { "tool err" } else { "tool" };

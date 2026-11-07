@@ -183,6 +183,7 @@ pub enum Action {
     ScrollUp(usize),
     ScrollDown(usize),
     ToggleTools,
+    ToggleThinking,
     Edit,
     None,
 }
@@ -201,6 +202,7 @@ pub fn handle_key(ed: &mut Editor, key: KeyEvent) -> Action {
         KeyCode::Char('n') if ctrl => Action::NewSession,
         KeyCode::Char('l') if ctrl => Action::SessionList,
         KeyCode::Char('o') if ctrl => Action::ToggleTools,
+        KeyCode::Char('t') if ctrl => Action::ToggleThinking,
         KeyCode::Char('j') if ctrl => {
             ed.newline();
             Action::Edit
@@ -326,6 +328,7 @@ mod tests {
         assert_eq!(handle_key(&mut e, key(KeyCode::Char('c'), KeyModifiers::CONTROL)), Action::Quit);
         assert_eq!(handle_key(&mut e, key(KeyCode::Esc, KeyModifiers::NONE)), Action::Interrupt);
         assert_eq!(handle_key(&mut e, key(KeyCode::Char('l'), KeyModifiers::CONTROL)), Action::SessionList);
+        assert_eq!(handle_key(&mut e, key(KeyCode::Char('t'), KeyModifiers::CONTROL)), Action::ToggleThinking);
         assert_eq!(handle_key(&mut e, key(KeyCode::Char('n'), KeyModifiers::CONTROL)), Action::NewSession);
         assert_eq!(handle_key(&mut e, key(KeyCode::PageUp, KeyModifiers::NONE)), Action::ScrollUp(10));
     }

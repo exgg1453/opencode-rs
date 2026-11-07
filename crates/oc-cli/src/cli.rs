@@ -14,8 +14,30 @@ pub struct Cli {
     /// Working directory
     #[arg(long, global = true)]
     pub cwd: Option<PathBuf>,
+    /// Model reasoning effort (overrides config)
+    #[arg(long, global = true, value_enum, value_name = "LEVEL")]
+    pub thinking: Option<ThinkingArg>,
     #[command(subcommand)]
     pub command: Option<Command>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ThinkingArg {
+    Off,
+    Low,
+    Medium,
+    High,
+}
+
+impl ThinkingArg {
+    pub fn level(self) -> Option<oc_ai::ThinkingLevel> {
+        match self {
+            ThinkingArg::Off => None,
+            ThinkingArg::Low => Some(oc_ai::ThinkingLevel::Low),
+            ThinkingArg::Medium => Some(oc_ai::ThinkingLevel::Medium),
+            ThinkingArg::High => Some(oc_ai::ThinkingLevel::High),
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -65,6 +87,9 @@ pub struct RunArgs {
     /// Auto-approve every permission prompt (deny rules still apply)
     #[arg(short = 'y', long = "yes", visible_alias = "dangerously-skip-permissions")]
     pub yes: bool,
+    /// Do not print the model's reasoning
+    #[arg(long)]
+    pub hide_thinking: bool,
 }
 
 #[derive(Debug, Args)]
@@ -133,6 +158,22 @@ mod tests {
     #[test]
     fn bad_format_rejected() {
         assert!(Cli::try_parse_from(["opencode", "run", "--format", "xml", "x"]).is_err());
+    }
+
+    #[test]
+    fn thinking_flags() {
+        assert_eq!(p(&["run", "hi"]).thinking, None);
+        for (v, want) in [("off", None), ("low", Some(oc_ai::ThinkingLevel::Low)), ("medium", Some(oc_ai::ThinkingLevel::Medium)), ("high", Some(oc_ai::ThinkingLevel::High))] {
+            let c = p(&["--thinking", v, "run", "hi"]);
+            assert_eq!(c.thinking.unwrap().level(), want);
+            // global: also accepted after the subcommand
+            assert_eq!(p(&["run", "--thinking", v, "hi"]).thinking.unwrap().level(), want);
+        }
+        assert!(Cli::try_parse_from(["opencode", "--thinking", "max"]).is_err());
+        let Some(Command::Run(a)) = p(&["run", "--hide-thinking", "hi"]).command else { panic!() };
+        assert!(a.hide_thinking);
+        let Some(Command::Run(a)) = p(&["run", "hi"]).command else { panic!() };
+        assert!(!a.hide_thinking);
     }
 
     #[test]

@@ -11,6 +11,24 @@ const FILE_WRITING_TOOLS: &[&str] = &["write", "edit"];
 
 const MAX_STEPS: usize = 100;
 const MAX_TOKENS: u32 = 8192;
+/// Times a step is redone after a retryable stream failure.
+const MAX_RETRIES: u32 = 3;
+const DEFAULT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Everything one model response produced.
+#[derive(Default)]
+struct Step {
+    thinking: Vec<ContentBlock>,
+    text: String,
+    calls: Vec<(String, String, serde_json::Value)>,
+}
+
+/// Store pending thinking text as an unsigned block (providers without signatures).
+fn flush_thinking(blocks: &mut Vec<ContentBlock>, pending: &mut String) {
+    if !pending.is_empty() {
+        blocks.push(ContentBlock::Thinking { thinking: std::mem::take(pending), signature: None });
+    }
+}
 
 impl Agent {
     /// Runs the model/tool loop for one user prompt, appending to `session.messages`
@@ -92,6 +110,42 @@ impl Agent {
         (output, false)
     }
 
+    /// Streams one model response, forwarding text/thinking deltas as they arrive.
+    async fn stream_step(
+        &self,
+        session_id: &str,
+        req: ChatRequest,
+        events: &UnboundedSender<AgentEvent>,
+    ) -> anyhow::Result<Step> {
+        let mut stream = self.provider.stream(req).await?;
+        let mut step = Step::default();
+        let mut cur_thinking = String::new();
+        while let Some(ev) = stream.next().await {
+            match ev? {
+                StreamEvent::TextDelta(t) => {
+                    step.text.push_str(&t);
+                    self.emit(events, session_id, AgentEvent::TextDelta { text: t }).await;
+                }
+                StreamEvent::ThinkingDelta(t) => {
+                    cur_thinking.push_str(&t);
+                    self.emit(events, session_id, AgentEvent::ThinkingDelta { text: t }).await;
+                }
+                StreamEvent::ThinkingSignature(sig) => {
+                    let thinking = std::mem::take(&mut cur_thinking);
+                    step.thinking.push(ContentBlock::Thinking { thinking, signature: Some(sig) });
+                }
+                StreamEvent::RedactedThinking(data) => {
+                    flush_thinking(&mut step.thinking, &mut cur_thinking);
+                    step.thinking.push(ContentBlock::RedactedThinking { data });
+                }
+                StreamEvent::ToolCall { id, name, input } => step.calls.push((id, name, input)),
+                StreamEvent::Finish { .. } => {}
+            }
+        }
+        flush_thinking(&mut step.thinking, &mut cur_thinking);
+        Ok(step)
+    }
+
     async fn run_loop(&self, session: &mut Session, events: &UnboundedSender<AgentEvent>) -> anyhow::Result<()> {
         let specs: Vec<ToolSpec> = self
             .tools
@@ -112,22 +166,26 @@ impl Agent {
                 messages: session.messages.clone(),
                 tools: specs.clone(),
                 max_tokens: MAX_TOKENS,
+                thinking: self.thinking,
             };
-            let mut stream = self.provider.stream(req).await?;
-            let mut text = String::new();
-            let mut calls: Vec<(String, String, serde_json::Value)> = vec![];
-            while let Some(ev) = stream.next().await {
-                match ev? {
-                    StreamEvent::TextDelta(t) => {
-                        text.push_str(&t);
-                        self.emit(events, &session.id, AgentEvent::TextDelta { text: t }).await;
+            // A step whose stream fails with a retryable error is thrown away entirely
+            // (nothing reaches session.messages, no tool runs) and redone.
+            let mut attempt = 0u32;
+            let Step { thinking, text, calls } = loop {
+                match self.stream_step(&session.id, req.clone(), events).await {
+                    Ok(step) => break step,
+                    Err(e) if oc_ai::is_retryable(&e) && attempt < MAX_RETRIES => {
+                        let delay = self.hooks.retry_base_delay.unwrap_or(DEFAULT_RETRY_DELAY) * 2u32.pow(attempt);
+                        attempt += 1;
+                        let ev = AgentEvent::Retry { attempt, max: MAX_RETRIES, reason: format!("{e:#}") };
+                        self.emit(events, &session.id, ev).await;
+                        tokio::time::sleep(delay).await;
                     }
-                    StreamEvent::ToolCall { id, name, input } => calls.push((id, name, input)),
-                    StreamEvent::Finish { .. } => {}
+                    Err(e) => return Err(e),
                 }
-            }
+            };
 
-            let mut blocks = vec![];
+            let mut blocks = thinking;
             if !text.is_empty() {
                 blocks.push(ContentBlock::Text { text });
             }

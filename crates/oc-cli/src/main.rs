@@ -73,12 +73,12 @@ async fn real_main() -> Result<bool> {
             Ok(true)
         }
         Some(Command::Run(args)) => {
-            let agent = setup::build_agent(cli.model.as_deref(), &cwd).await?;
+            let agent = setup::build_agent(cli.model.as_deref(), cli.thinking, &cwd).await?;
             let store = SessionStore::open_default()?;
             run::run(agent, store, args, cwd).await
         }
         Some(Command::Serve(args)) => {
-            let agent = setup::build_agent(cli.model.as_deref(), &cwd).await?;
+            let agent = setup::build_agent(cli.model.as_deref(), cli.thinking, &cwd).await?;
             let store = SessionStore::open_default()?;
             let addr: std::net::SocketAddr = format!("{}:{}", args.hostname, args.port)
                 .parse()
@@ -91,7 +91,7 @@ async fn real_main() -> Result<bool> {
             Ok(true)
         }
         Some(Command::Tui) | None => {
-            let agent = setup::build_agent(cli.model.as_deref(), &cwd).await?;
+            let agent = setup::build_agent(cli.model.as_deref(), cli.thinking, &cwd).await?;
             let store = SessionStore::open_default()?;
             let session = oc_core::Session::new(cwd);
             oc_tui::run(agent, session, store).await?;

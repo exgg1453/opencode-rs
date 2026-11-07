@@ -1,6 +1,6 @@
 //! Application state and the event -> state reducer (pure, no I/O).
 
-use oc_ai::{ContentBlock, Role};
+use oc_ai::{ContentBlock, Role, ThinkingLevel};
 use oc_core::{AgentEvent, Session};
 
 use crate::input::Editor;
@@ -9,6 +9,8 @@ use crate::input::Editor;
 pub enum Block {
     User(String),
     Assistant(String),
+    /// Model reasoning, shown muted and collapsible ahead of the step's answer.
+    Thinking(String),
     Tool { id: String, name: String, summary: String, output: Option<String>, is_error: bool },
     Error(String),
     Info(String),
@@ -36,6 +38,10 @@ pub struct AppState {
     /// Lines scrolled up from the bottom of the transcript (0 = follow).
     pub scroll: usize,
     pub expand_tools: bool,
+    /// Show thinking blocks in full instead of their first line.
+    pub expand_thinking: bool,
+    /// Reasoning level used for the next turn (shown in the status bar).
+    pub thinking: Option<ThinkingLevel>,
     pub popup: Option<SessionPopup>,
     pub model: String,
     pub cwd: String,
@@ -54,6 +60,8 @@ impl AppState {
             tick: 0,
             scroll: 0,
             expand_tools: false,
+            expand_thinking: false,
+            thinking: None,
             popup: None,
             model,
             cwd,
@@ -71,6 +79,20 @@ impl AppState {
                 } else {
                     self.blocks.push(Block::Assistant(text));
                 }
+            }
+            AgentEvent::ThinkingDelta { text } => {
+                if let Some(Block::Thinking(s)) = self.blocks.last_mut() {
+                    s.push_str(&text);
+                } else {
+                    self.blocks.push(Block::Thinking(text));
+                }
+            }
+            AgentEvent::Retry { attempt, max, .. } => {
+                // The step restarts from scratch: drop what it streamed so far.
+                while matches!(self.blocks.last(), Some(Block::Assistant(_) | Block::Thinking(_))) {
+                    self.blocks.pop();
+                }
+                self.blocks.push(Block::Info(format!("Connection lost, retrying ({attempt}/{max})…")));
             }
             AgentEvent::ToolStart { id, name, input } => {
                 let summary = summarize_input(&name, &input);
@@ -93,6 +115,10 @@ impl AppState {
                 self.busy = false;
             }
         }
+    }
+
+    pub fn toggle_thinking(&mut self) {
+        self.expand_thinking = !self.expand_thinking;
     }
 
     pub fn load_session(&mut self, s: &Session) {
@@ -138,6 +164,12 @@ pub fn blocks_from_session(s: &Session) -> Vec<Block> {
             match (m.role, c) {
                 (Role::User, ContentBlock::Text { text }) => blocks.push(Block::User(text.clone())),
                 (Role::Assistant, ContentBlock::Text { text }) => blocks.push(Block::Assistant(text.clone())),
+                (_, ContentBlock::Thinking { thinking, .. }) => {
+                    if !thinking.trim().is_empty() {
+                        blocks.push(Block::Thinking(thinking.clone()));
+                    }
+                }
+                (_, ContentBlock::RedactedThinking { .. }) => {}
                 (_, ContentBlock::ToolUse { id, name, input }) => blocks.push(Block::Tool {
                     id: id.clone(),
                     name: name.clone(),
@@ -216,6 +248,61 @@ mod tests {
         let b = blocks_from_session(&sess);
         assert_eq!(b.len(), 2);
         assert!(matches!(&b[1], Block::Tool { output: Some(o), summary, .. } if o == "data" && summary == "x.rs"));
+    }
+
+    #[test]
+    fn thinking_streams_before_text() {
+        let mut s = st();
+        s.apply(AgentEvent::ThinkingDelta { text: "let me ".into() });
+        s.apply(AgentEvent::ThinkingDelta { text: "think".into() });
+        s.apply(AgentEvent::TextDelta { text: "answer".into() });
+        assert_eq!(s.blocks, vec![Block::Thinking("let me think".into()), Block::Assistant("answer".into())]);
+    }
+
+    #[test]
+    fn toggle_thinking_flag() {
+        let mut s = st();
+        assert!(!s.expand_thinking);
+        s.toggle_thinking();
+        assert!(s.expand_thinking);
+        s.toggle_thinking();
+        assert!(!s.expand_thinking);
+    }
+
+    #[test]
+    fn retry_removes_partial_step_only() {
+        let mut s = st();
+        s.blocks.push(Block::User("q".into()));
+        s.apply(AgentEvent::ThinkingDelta { text: "old step".into() });
+        s.apply(AgentEvent::TextDelta { text: "old text".into() });
+        s.apply(AgentEvent::ToolStart { id: "1".into(), name: "bash".into(), input: json!({"command":"ls"}) });
+        s.apply(AgentEvent::ToolEnd { id: "1".into(), output: "o".into(), is_error: false });
+        s.apply(AgentEvent::ThinkingDelta { text: "partial".into() });
+        s.apply(AgentEvent::TextDelta { text: "partial text".into() });
+        s.apply(AgentEvent::Retry { attempt: 1, max: 3, reason: "reset".into() });
+        assert_eq!(s.blocks.len(), 5);
+        assert_eq!(s.blocks[0], Block::User("q".into()));
+        assert_eq!(s.blocks[1], Block::Thinking("old step".into()));
+        assert_eq!(s.blocks[2], Block::Assistant("old text".into()));
+        assert!(matches!(s.blocks[3], Block::Tool { .. }));
+        assert_eq!(s.blocks[4], Block::Info("Connection lost, retrying (1/3)…".into()));
+        // the restarted text is not glued onto anything
+        s.apply(AgentEvent::TextDelta { text: "fresh".into() });
+        assert_eq!(s.blocks[5], Block::Assistant("fresh".into()));
+    }
+
+    #[test]
+    fn restores_thinking_from_session() {
+        let mut sess = Session::new("/tmp".into());
+        sess.messages.push(ChatMessage {
+            role: Role::Assistant,
+            content: vec![
+                ContentBlock::Thinking { thinking: "hmm".into(), signature: Some("s".into()) },
+                ContentBlock::RedactedThinking { data: "x".into() },
+                ContentBlock::Text { text: "ans".into() },
+            ],
+        });
+        assert_eq!(blocks_from_session(&sess), vec![Block::Thinking("hmm".into()), Block::Assistant("ans".into())]);
     }
 
     #[test]

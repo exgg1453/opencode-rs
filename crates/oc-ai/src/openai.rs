@@ -8,7 +8,7 @@ use futures::stream::{BoxStream, StreamExt};
 use serde_json::{json, Value};
 
 use crate::sse::{drive, EventProcessor, SseEvent};
-use crate::{ChatRequest, ContentBlock, Provider, Role, StreamEvent};
+use crate::{ChatRequest, ContentBlock, Provider, ProviderError, Role, StreamEvent};
 
 /// How the provider authenticates.
 #[derive(Debug, Clone, PartialEq)]
@@ -109,6 +109,15 @@ impl OpenAiProvider {
 }
 
 pub fn build_body(req: &ChatRequest) -> Value {
+    build_body_for("openai", req)
+}
+
+/// Providers whose chat completions API accepts `reasoning_effort`.
+fn supports_reasoning_effort(provider_id: &str) -> bool {
+    matches!(provider_id, "openai" | "azure" | "openrouter")
+}
+
+pub fn build_body_for(provider_id: &str, req: &ChatRequest) -> Value {
     let mut messages: Vec<Value> = vec![];
     if let Some(s) = &req.system {
         messages.push(json!({"role":"system","content":s}));
@@ -123,7 +132,7 @@ pub fn build_body(req: &ChatRequest) -> Value {
                             messages.push(json!({"role":"tool","tool_call_id":tool_use_id,"content":content}));
                         }
                         ContentBlock::Text { text: t } => text.push_str(t),
-                        ContentBlock::ToolUse { .. } => {}
+                        ContentBlock::ToolUse { .. } | ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
                     }
                 }
                 if !text.is_empty() {
@@ -140,7 +149,8 @@ pub fn build_body(req: &ChatRequest) -> Value {
                             "id": id, "type": "function",
                             "function": {"name": name, "arguments": input.to_string()}
                         })),
-                        ContentBlock::ToolResult { .. } => {}
+                        // Reasoning is never sent back to OpenAI-compatible providers.
+                        ContentBlock::ToolResult { .. } | ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
                     }
                 }
                 let mut msg = json!({"role":"assistant","content": if text.is_empty() { Value::Null } else { json!(text) }});
@@ -154,9 +164,14 @@ pub fn build_body(req: &ChatRequest) -> Value {
     let mut body = json!({
         "model": req.model,
         "messages": messages,
-        "max_tokens": req.max_tokens,
         "stream": true,
     });
+    // OpenAI's own API rejects `max_tokens` on current models; compatible servers only know it.
+    let limit = if matches!(provider_id, "openai" | "azure") { "max_completion_tokens" } else { "max_tokens" };
+    body[limit] = json!(req.max_tokens);
+    if let (Some(level), true) = (req.thinking, supports_reasoning_effort(provider_id)) {
+        body["reasoning_effort"] = json!(level.as_str());
+    }
     if !req.tools.is_empty() {
         body["tools"] = req
             .tools
@@ -203,11 +218,20 @@ impl EventProcessor for OpenAiProcessor {
         let v: Value = serde_json::from_str(data).with_context(|| format!("bad SSE json: {data}"))?;
         if let Some(e) = v.get("error") {
             let msg = e["message"].as_str().map(str::to_string).unwrap_or_else(|| e.to_string());
-            return Err(anyhow!("openai stream error: {msg}"));
+            let kind = e["type"].as_str().or(e["code"].as_str()).unwrap_or_default();
+            let retryable = kind.contains("server_error") || kind.contains("overloaded");
+            return Err(anyhow::Error::new(ProviderError::new(None, retryable, format!("openai stream error: {msg}"))));
         }
         let mut out = vec![];
         let Some(choice) = v["choices"].get(0) else { return Ok(out) };
         let d = &choice["delta"];
+        // DeepSeek/Groq use `reasoning_content`; OpenRouter uses `reasoning`.
+        for key in ["reasoning_content", "reasoning"] {
+            if let Some(t) = d[key].as_str().filter(|t| !t.is_empty()) {
+                out.push(StreamEvent::ThinkingDelta(t.to_string()));
+                break;
+            }
+        }
         if let Some(t) = d["content"].as_str() {
             if !t.is_empty() {
                 out.push(StreamEvent::TextDelta(t.to_string()));
@@ -242,14 +266,12 @@ impl EventProcessor for OpenAiProcessor {
         Ok(out)
     }
 
-    fn finish(&mut self) -> Vec<StreamEvent> {
+    fn finish(&mut self) -> anyhow::Result<Vec<StreamEvent>> {
         if self.finished {
-            return vec![];
+            Ok(vec![])
+        } else {
+            Err(crate::sse::truncated("openai-compatible"))
         }
-        self.finished = true;
-        let mut out = self.flush_calls().unwrap_or_default();
-        out.push(StreamEvent::Finish { stop_reason: "end_turn".into() });
-        out
     }
 }
 
@@ -260,7 +282,7 @@ impl Provider for OpenAiProvider {
     }
 
     async fn stream(&self, req: ChatRequest) -> anyhow::Result<BoxStream<'static, anyhow::Result<StreamEvent>>> {
-        let body = build_body(&req);
+        let body = build_body_for(&self.id, &req);
         let url = self.endpoint(&req.model);
         let id = self.id.clone();
         let resp = crate::http::send_with_retry(&id, self.backoff, || {
@@ -272,7 +294,7 @@ impl Provider for OpenAiProvider {
             }
         })
         .await?;
-        let bytes = resp.bytes_stream().map(|r| r.map(|b| b.to_vec()).map_err(anyhow::Error::from)).boxed();
+        let bytes = resp.bytes_stream().map(move |r| r.map(|b| b.to_vec()).map_err(|e| crate::http::stream_error(&id, e))).boxed();
         Ok(drive(bytes, OpenAiProcessor::default()))
     }
 }
@@ -324,6 +346,7 @@ data: [DONE]\n\n";
             ],
             tools: vec![],
             max_tokens: 5,
+            thinking: None,
         };
         let b = build_body(&req);
         let m = b["messages"].as_array().unwrap();
@@ -331,5 +354,57 @@ data: [DONE]\n\n";
         assert_eq!(m[2]["tool_calls"][0]["function"]["arguments"], "{\"a\":1}");
         assert_eq!(m[3]["role"], "tool");
         assert_eq!(m[3]["tool_call_id"], "c");
+    }
+
+    #[tokio::test]
+    async fn parses_reasoning_content_and_reasoning() {
+        let data = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"hm\"}}]}\n\n\
+data: {\"choices\":[{\"delta\":{\"reasoning\":\"ok\"}}]}\n\n\
+data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\",\"content\":\"Hi\"}}]}\n\n\
+data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n";
+        let chunks: Vec<anyhow::Result<Vec<u8>>> = vec![Ok(data.as_bytes().to_vec())];
+        let evs: Vec<StreamEvent> = drive(futures::stream::iter(chunks), OpenAiProcessor::default()).map(|e| e.unwrap()).collect().await;
+        assert_eq!(
+            evs,
+            vec![
+                StreamEvent::ThinkingDelta("hm".into()),
+                StreamEvent::ThinkingDelta("ok".into()),
+                StreamEvent::TextDelta("Hi".into()),
+                StreamEvent::Finish { stop_reason: "end_turn".into() },
+            ]
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_and_dropped_thinking() {
+        let req = ChatRequest {
+            model: "m".into(),
+            system: None,
+            messages: vec![ChatMessage {
+                role: Role::Assistant,
+                content: vec![
+                    ContentBlock::Thinking { thinking: "secret".into(), signature: Some("s".into()) },
+                    ContentBlock::RedactedThinking { data: "d".into() },
+                    ContentBlock::Text { text: "hello".into() },
+                ],
+            }],
+            tools: vec![],
+            max_tokens: 5,
+            thinking: Some(crate::ThinkingLevel::High),
+        };
+        for id in ["openai", "azure", "openrouter"] {
+            assert_eq!(build_body_for(id, &req)["reasoning_effort"], "high", "{id}");
+            let limit = if id == "openrouter" { "max_tokens" } else { "max_completion_tokens" };
+            assert_eq!(build_body_for(id, &req)[limit], 5, "{id}");
+        }
+        for id in ["groq", "deepseek", "ollama"] {
+            assert!(build_body_for(id, &req).get("reasoning_effort").is_none(), "{id}");
+        }
+        let b = build_body_for("openai", &req);
+        assert_eq!(b["messages"][0]["content"], "hello");
+        assert!(!b.to_string().contains("secret"));
+        let mut off = req.clone();
+        off.thinking = None;
+        assert!(build_body_for("openai", &off).get("reasoning_effort").is_none());
     }
 }

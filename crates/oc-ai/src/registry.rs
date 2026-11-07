@@ -253,7 +253,7 @@ mod tests {
         let m = crate::http::testutil::mock(vec![(200, "text/event-stream", sse.into())]).await;
         let o = opts(Some("azkey"), Some(&m.url));
         let p = build_azure(&o).unwrap();
-        let req = ChatRequest { model: "dep".into(), system: None, messages: vec![], tools: vec![], max_tokens: 1 };
+        let req = ChatRequest { model: "dep".into(), system: None, messages: vec![], tools: vec![], max_tokens: 1, thinking: None };
         let evs: Vec<_> = p.stream(req).await.unwrap().collect().await;
         assert_eq!(evs[0].as_ref().unwrap(), &StreamEvent::TextDelta("ok".into()));
         let r = m.requests.lock().unwrap()[0].to_ascii_lowercase();
@@ -272,7 +272,7 @@ mod tests {
         ])
         .await;
         let p = OpenAiProvider::new("k").with_base_url(m.url.clone()).with_backoff(std::time::Duration::from_millis(1));
-        let req = ChatRequest { model: "m".into(), system: None, messages: vec![], tools: vec![], max_tokens: 1 };
+        let req = ChatRequest { model: "m".into(), system: None, messages: vec![], tools: vec![], max_tokens: 1, thinking: None };
         let evs: Vec<_> = p.stream(req).await.unwrap().collect().await;
         assert_eq!(evs[0].as_ref().unwrap(), &StreamEvent::TextDelta("hi".into()));
         assert_eq!(m.hits.load(std::sync::atomic::Ordering::SeqCst), 3);
@@ -282,7 +282,7 @@ mod tests {
     async fn openai_error_is_readable() {
         let m = crate::http::testutil::mock(vec![(401, "application/json", r#"{"error":{"message":"Incorrect API key"}}"#.into())]).await;
         let p = OpenAiProvider::new("k").with_base_url(m.url.clone());
-        let req = ChatRequest { model: "m".into(), system: None, messages: vec![], tools: vec![], max_tokens: 1 };
+        let req = ChatRequest { model: "m".into(), system: None, messages: vec![], tools: vec![], max_tokens: 1, thinking: None };
         let e = p.stream(req).await.err().unwrap().to_string();
         assert!(e.contains("401") && e.contains("Incorrect API key"), "{e}");
     }
