@@ -1,9 +1,10 @@
 //! Router assembly.
 
 use axum::extract::DefaultBodyLimit;
+use axum::http::{header, HeaderValue, Method};
 use axum::routing::{get, post};
 use axum::Router;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use crate::handlers::{events, health, sessions, share};
@@ -11,7 +12,19 @@ use crate::state::AppState;
 
 const SHARE_BODY_LIMIT: usize = 64 * 1024 * 1024;
 
+/// CORS only for explicitly allowed origins; with none, browsers get no CORS headers
+/// and cross-site pages cannot read responses.
+fn cors(state: &AppState) -> CorsLayer {
+    let origins: Vec<HeaderValue> =
+        state.security.allowed_origins().iter().filter_map(|o| HeaderValue::from_str(o).ok()).collect();
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list(origins))
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+}
+
 pub fn router(state: AppState) -> Router {
+    let cors = cors(&state);
     Router::new()
         .route("/health", get(health::health))
         .route("/session", get(sessions::list).post(sessions::create))
@@ -27,7 +40,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/share/{id}/data", get(share::data))
         .fallback(health::not_found)
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::security::enforce))
+        .layer(cors)
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
         .with_state(state)
 }

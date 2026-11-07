@@ -264,7 +264,7 @@ mod tests {
                 Ok(())
             }
         }
-        let state = crate::AppState::new(Arc::new(NoRepo), Arc::new(NoRun)).with_permissions(broker.clone());
+        let state = crate::AppState::new(Arc::new(NoRepo), Arc::new(NoRun)).with_permissions(broker.clone()).with_security(crate::Security::disabled());
         let app = crate::router(state);
         let b2 = broker.clone();
         let t = tokio::spawn(async move { b2.ask(&req("s1")).await });

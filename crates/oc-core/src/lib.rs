@@ -12,6 +12,7 @@ use oc_ai::Provider;
 use serde::{Deserialize, Serialize};
 
 mod agent;
+pub mod bashcmd;
 pub mod auth;
 mod config;
 pub mod hooks;

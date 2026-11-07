@@ -37,7 +37,7 @@ impl crate::backend::TurnRunner for NoRunner {
 }
 
 fn app(dir: &std::path::Path) -> axum::Router {
-    router(AppState::new(Arc::new(NoRepo), Arc::new(NoRunner)).with_share_dir(dir.to_path_buf()))
+    router(AppState::new(Arc::new(NoRepo), Arc::new(NoRunner)).with_share_dir(dir.to_path_buf()).with_security(crate::Security::disabled()))
 }
 
 async fn req(app: &axum::Router, method: &str, uri: &str, secret: Option<&str>, body: Option<Value>) -> (StatusCode, String) {

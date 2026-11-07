@@ -25,13 +25,30 @@ pub struct AppState {
     pub events: broadcast::Sender<SessionEvent>,
     pub permissions: crate::handlers::permission::PermissionBroker,
     pub shares: Arc<crate::share_store::ShareStore>,
+    pub security: Arc<crate::security::Security>,
     running: Arc<Mutex<HashMap<String, CancellationToken>>>,
 }
 
 impl AppState {
     pub fn new(repo: Arc<dyn SessionRepo>, runner: Arc<dyn TurnRunner>) -> Self {
         let (events, _) = broadcast::channel(1024);
-        AppState { repo, runner, events, permissions: Default::default(), shares: Arc::new(crate::share_store::ShareStore::default_dir()), running: Default::default() }
+        // Secure by default: an unknown random token locks every protected route until the
+        // caller installs real settings with `with_security`.
+        let security = Arc::new(crate::security::Security::new(crate::security::Security::generate_token(), true));
+        AppState {
+            repo,
+            runner,
+            events,
+            permissions: Default::default(),
+            shares: Arc::new(crate::share_store::ShareStore::default_dir()),
+            security,
+            running: Default::default(),
+        }
+    }
+
+    pub fn with_security(mut self, security: crate::security::Security) -> Self {
+        self.security = Arc::new(security);
+        self
     }
 
     /// Use a specific directory for shared session snapshots.

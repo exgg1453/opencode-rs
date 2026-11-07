@@ -70,6 +70,15 @@ pub fn share_base(config: &Config) -> String {
     raw.trim().trim_end_matches('/').to_string()
 }
 
+/// Share-server token: `OPENCODE_SHARE_TOKEN`, then `share_token` in the config.
+pub fn share_token(config: &Config) -> Option<String> {
+    std::env::var("OPENCODE_SHARE_TOKEN")
+        .ok()
+        .or_else(|| config.share_token.clone())
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
 #[derive(Debug, Deserialize)]
 struct ShareResponse {
     id: String,
@@ -105,12 +114,17 @@ pub async fn share_with_store(config: &Config, session: &Session, store: &ShareS
         }
         // Share vanished on the server: fall through and create a new one.
     }
-    let resp = client
-        .post(format!("{base}/share"))
-        .json(session)
+    let mut post = client.post(format!("{base}/share")).json(session);
+    if let Some(t) = share_token(config) {
+        post = post.bearer_auth(t);
+    }
+    let resp = post
         .send()
         .await
         .with_context(|| format!("contacting share server at {base}"))?;
+    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        bail!("share server at {base} needs its API token: set OPENCODE_SHARE_TOKEN (printed by `opencode serve`)");
+    }
     if !resp.status().is_success() {
         bail!("share server rejected the session ({})", error_text(resp).await);
     }

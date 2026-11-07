@@ -24,6 +24,8 @@ pub struct Config {
     pub lsp: Option<serde_json::Value>,
     /// Base URL of the share server.
     pub share_url: Option<String>,
+    /// Bearer token of the share server (prefer `OPENCODE_SHARE_TOKEN` over storing it here).
+    pub share_token: Option<String>,
     /// Model reasoning effort: "off", "low", "medium" or "high".
     pub thinking: Option<String>,
 }
@@ -96,6 +98,9 @@ impl Config {
         }
         if other.share_url.is_some() {
             self.share_url = other.share_url;
+        }
+        if other.share_token.is_some() {
+            self.share_token = other.share_token;
         }
         if other.thinking.is_some() {
             self.thinking = other.thinking;

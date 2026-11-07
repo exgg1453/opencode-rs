@@ -357,12 +357,14 @@ Override or add servers in the config:
 | `GET /session/{id}/message`, `POST /session/{id}/message` | Read messages, or send `{"text": "..."}` and get the answer |
 | `POST /session/{id}/abort` | Stop the running answer |
 | `POST /session/{id}/permission/{permission_id}` | Answer a permission request with `{"response": "once" \| "always" \| "reject"}` |
-| `GET /event` | Server-Sent Events stream of everything happening (text, tools, thinking, permission requests) |
+| `GET /event` | Server-Sent Events stream of everything happening (text, tools, thinking, permission requests); token via `?token=` |
 | `POST /share`, `GET /share/{id}`, `GET /share/{id}/data` | Session sharing |
 
-**Sharing:** `opencode share <id>` (or `/share` in the UI) uploads the session to the share server and prints a link to a read-only web page of the conversation. Run `opencode serve` on a machine others can reach and point `share_url` (or `OPENCODE_SHARE_URL`) at it. Set `OPENCODE_PUBLIC_URL` on the server to control the links it hands out. Each share has a secret that only your machine knows, so only you can update or remove it with `opencode unshare <id>`.
+**Authentication.** Because the API can run commands on the host, every request (except public share pages) needs a bearer token. `opencode serve` prints a fresh token on start, or set your own with `OPENCODE_SERVER_TOKEN` (≥16 chars). Send it as `Authorization: Bearer <token>`; `GET /event` also accepts `?token=<token>` because browsers cannot set headers on `EventSource`. The server also rejects requests whose `Origin` is not allow-listed (blocking cross-site browser pages) and, on loopback, whose `Host` is not a loopback name (blocking DNS-rebinding). Allow a web app with `OPENCODE_CORS_ORIGINS=https://app.example.com` and extra host names with `OPENCODE_ALLOWED_HOSTS`. Session working directories are confined to the directory `serve` was started in.
 
-> The server has no login of its own. Keep it on `127.0.0.1` or behind a proxy with authentication if other people can reach it.
+**Sharing:** `opencode share <id>` (or `/share` in the UI) uploads the session to the share server and prints a link to a read-only web page of the conversation. Run `opencode serve` on a machine others can reach, point `share_url` (or `OPENCODE_SHARE_URL`) at it, and give the client the server's token with `OPENCODE_SHARE_TOKEN`. Set `OPENCODE_PUBLIC_URL` on the server to control the links it hands out (its host is added to the allow-list automatically). Each share also has its own secret, so only you can update or remove it with `opencode unshare <id>`.
+
+> Even with a token, treat the server as powerful: anyone who has the token can run commands on the host. Keep it on `127.0.0.1` unless you deliberately expose it, and use a strong `OPENCODE_SERVER_TOKEN` behind a TLS proxy if you do.
 
 ## Where data is stored
 

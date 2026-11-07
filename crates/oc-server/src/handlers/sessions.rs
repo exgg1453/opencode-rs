@@ -50,10 +50,8 @@ pub async fn create(
     State(state): State<AppState>,
     body: Option<Json<CreateBody>>,
 ) -> Result<(StatusCode, Json<Session>), ApiError> {
-    let cwd = match body.and_then(|Json(b)| b.cwd) {
-        Some(c) => c,
-        None => std::env::current_dir().map_err(|e| ApiError::Internal(e.to_string()))?,
-    };
+    let requested = body.and_then(|Json(b)| b.cwd);
+    let cwd = state.security.session_dir(requested.as_deref())?;
     let session = Session::new(cwd);
     state.repo.save(&session)?;
     Ok((StatusCode::CREATED, Json(session)))
@@ -95,6 +93,8 @@ pub async fn prompt(
         return Err(ApiError::BadRequest("text must not be empty".into()));
     }
     let mut session = load(&state, &id)?;
+    // Sessions created elsewhere (e.g. by the TUI) may live outside the server root.
+    state.security.session_dir(Some(&session.cwd))?;
     let guard = state.begin_turn(&id)?;
 
     // Forward agent events, tagged with the session id, onto the broadcast bus.

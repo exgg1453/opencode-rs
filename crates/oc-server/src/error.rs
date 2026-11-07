@@ -12,6 +12,8 @@ pub enum ApiError {
     #[error("{0}")]
     BadRequest(String),
     #[error("{0}")]
+    Unauthorized(String),
+    #[error("{0}")]
     Forbidden(String),
     #[error("{0}")]
     Busy(String),
@@ -26,6 +28,7 @@ impl ApiError {
         match self {
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            ApiError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             ApiError::Forbidden(_) => StatusCode::FORBIDDEN,
             ApiError::Busy(_) | ApiError::Aborted(_) => StatusCode::CONFLICT,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -35,6 +38,7 @@ impl ApiError {
         match self {
             ApiError::NotFound(_) => "not_found",
             ApiError::BadRequest(_) => "bad_request",
+            ApiError::Unauthorized(_) => "unauthorized",
             ApiError::Forbidden(_) => "forbidden",
             ApiError::Busy(_) => "session_busy",
             ApiError::Aborted(_) => "aborted",
@@ -45,6 +49,7 @@ impl ApiError {
         match self {
             ApiError::NotFound(m)
             | ApiError::BadRequest(m)
+            | ApiError::Unauthorized(m)
             | ApiError::Forbidden(m)
             | ApiError::Busy(m)
             | ApiError::Aborted(m)

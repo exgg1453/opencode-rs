@@ -28,6 +28,36 @@ async fn main() {
     }
 }
 
+fn env_list(name: &str) -> Vec<String> {
+    std::env::var(name)
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Token from `OPENCODE_SERVER_TOKEN`, else a fresh random one; extra hosts and origins
+/// from `OPENCODE_PUBLIC_URL`, `OPENCODE_ALLOWED_HOSTS` and `OPENCODE_CORS_ORIGINS`.
+fn server_security(addr: &std::net::SocketAddr) -> (oc_server::Security, String) {
+    let token = std::env::var("OPENCODE_SERVER_TOKEN")
+        .ok()
+        .filter(|t| t.len() >= 16)
+        .unwrap_or_else(oc_server::Security::generate_token);
+    let mut sec = oc_server::Security::new(token.clone(), addr.ip().is_loopback());
+    let public_host = std::env::var("OPENCODE_PUBLIC_URL")
+        .ok()
+        .and_then(|u| u.split("://").nth(1).map(|r| r.split(['/', ':']).next().unwrap_or("").to_string()))
+        .filter(|h| !h.is_empty());
+    for h in env_list("OPENCODE_ALLOWED_HOSTS").into_iter().chain(public_host) {
+        sec = sec.allow_host(&h);
+    }
+    for o in env_list("OPENCODE_CORS_ORIGINS") {
+        sec = sec.allow_origin(&o);
+    }
+    (sec, token)
+}
+
 async fn real_main() -> Result<bool> {
     let cli = Cli::parse();
     let cwd = setup::resolve_cwd(cli.cwd.clone())?;
@@ -74,9 +104,15 @@ async fn real_main() -> Result<bool> {
             let addr: std::net::SocketAddr = format!("{}:{}", args.hostname, args.port)
                 .parse()
                 .context("invalid --hostname/--port")?;
+            let (security, token) = server_security(&addr);
             eprintln!("opencode server listening on http://{addr}");
+            eprintln!("API token: {token}");
+            eprintln!("Send it as `Authorization: Bearer <token>` (or ?token= on /event).");
+            if !addr.ip().is_loopback() {
+                eprintln!("warning: listening on a non-loopback address; anyone who can reach it and has the token can run commands on this machine");
+            }
             tokio::select! {
-                r = oc_server::serve(agent, store, addr) => r?,
+                r = oc_server::serve(agent, store, addr, security) => r?,
                 _ = tokio::signal::ctrl_c() => eprintln!("\nshutting down"),
             }
             Ok(true)

@@ -59,7 +59,7 @@ impl TurnRunner for MockRunner {
 }
 
 fn state() -> AppState {
-    AppState::new(Arc::new(MemRepo::default()), Arc::new(MockRunner))
+    AppState::new(Arc::new(MemRepo::default()), Arc::new(MockRunner)).with_security(crate::Security::disabled())
 }
 
 async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
@@ -215,22 +215,112 @@ async fn sse_framing_tags_session_id() {
     assert!(text.contains("\"text\":\"echo: hi\""));
 }
 
+const TOKEN: &str = "test-token-0123456789abcdef";
+
+fn secured() -> Router {
+    let root = std::env::current_dir().unwrap();
+    let sec = crate::Security::new(TOKEN, true).with_root(root).allow_origin("https://app.test");
+    router(AppState::new(Arc::new(MemRepo::default()), Arc::new(MockRunner)).with_security(sec))
+}
+
+async fn send(app: &Router, method: &str, uri: &str, headers: &[(&str, &str)], body: Option<Value>) -> axum::http::Response<Body> {
+    let mut req = Request::builder().method(method).uri(uri);
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    let body = match body {
+        Some(b) => {
+            req = req.header("content-type", "application/json");
+            Body::from(b.to_string())
+        }
+        None => Body::empty(),
+    };
+    app.clone().oneshot(req.body(body).unwrap()).await.unwrap()
+}
+
+const HOST: (&str, &str) = ("host", "127.0.0.1:4096");
+const AUTH: (&str, &str) = ("authorization", "Bearer test-token-0123456789abcdef");
+
 #[tokio::test]
-async fn cors_headers_present() {
-    let app = router(state());
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("OPTIONS")
-                .uri("/session")
-                .header("origin", "http://x.test")
-                .header("access-control-request-method", "POST")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert!(resp.headers().contains_key("access-control-allow-origin"));
+async fn requires_bearer_token() {
+    let app = secured();
+    assert_eq!(send(&app, "POST", "/session", &[HOST], None).await.status(), StatusCode::UNAUTHORIZED);
+    let wrong = ("authorization", "Bearer nope");
+    assert_eq!(send(&app, "POST", "/session", &[HOST, wrong], None).await.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(send(&app, "GET", "/session", &[HOST], None).await.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(send(&app, "GET", "/event", &[HOST], None).await.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(send(&app, "POST", "/session", &[HOST, AUTH], None).await.status(), StatusCode::CREATED);
+    let q = format!("/event?token={TOKEN}");
+    assert_eq!(send(&app, "GET", &q, &[HOST], None).await.status(), StatusCode::OK);
+    // the query token is only honoured on /event
+    let q = format!("/session?token={TOKEN}");
+    assert_eq!(send(&app, "GET", &q, &[HOST], None).await.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn blocks_dns_rebinding_hosts() {
+    let app = secured();
+    let evil = ("host", "evil.test:4096");
+    assert_eq!(send(&app, "POST", "/session", &[evil, AUTH], None).await.status(), StatusCode::FORBIDDEN);
+    assert_eq!(send(&app, "GET", "/health", &[evil], None).await.status(), StatusCode::FORBIDDEN);
+    assert_eq!(send(&app, "GET", "/health", &[("host", "localhost:4096")], None).await.status(), StatusCode::OK);
+    assert_eq!(send(&app, "GET", "/health", &[("host", "[::1]:4096")], None).await.status(), StatusCode::OK);
+    assert_eq!(send(&app, "GET", "/health", &[], None).await.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn blocks_cross_site_pages() {
+    let app = secured();
+    let evil = ("origin", "https://evil.test");
+    // the drive-by PoC from SECURITY-AUDIT.md #1, even with a leaked token
+    assert_eq!(send(&app, "POST", "/session", &[HOST, AUTH, evil], None).await.status(), StatusCode::FORBIDDEN);
+    let pre = send(
+        &app,
+        "OPTIONS",
+        "/session",
+        &[HOST, evil, ("access-control-request-method", "POST"), ("access-control-request-headers", "authorization")],
+        None,
+    )
+    .await;
+    assert!(!pre.headers().contains_key("access-control-allow-origin"));
+    let ok = ("origin", "https://app.test");
+    let r = send(&app, "POST", "/session", &[HOST, AUTH, ok], None).await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+    assert_eq!(r.headers()["access-control-allow-origin"], "https://app.test");
+}
+
+#[tokio::test]
+async fn session_cwd_cannot_leave_root() {
+    let app = secured();
+    for cwd in ["/", "..", "/etc"] {
+        let r = send(&app, "POST", "/session", &[HOST, AUTH], Some(json!({ "cwd": cwd }))).await;
+        assert_eq!(r.status(), StatusCode::FORBIDDEN, "{cwd}");
+    }
+    let r = send(&app, "POST", "/session", &[HOST, AUTH], Some(json!({ "cwd": "src" }))).await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn share_creation_needs_token_but_pages_are_public() {
+    let app = secured();
+    let s = json!({"id":"x","title":"t","cwd":"/","messages":[]});
+    assert_eq!(send(&app, "POST", "/share", &[HOST], Some(s)).await.status(), StatusCode::UNAUTHORIZED);
+    // unknown share: 404 from the handler, not 401 from the auth layer
+    assert_eq!(send(&app, "GET", "/share/doesnotexist", &[HOST], None).await.status(), StatusCode::NOT_FOUND);
+    // a share page may be opened from any site
+    let r = send(&app, "GET", "/share/doesnotexist/data", &[HOST, ("origin", "https://evil.test")], None).await;
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
+}
+
+#[test]
+fn default_state_is_locked() {
+    // AppState::new without with_security must not leave the API open.
+    let st = state_default();
+    assert!(format!("{:?}", st.security).contains("token: Some"));
+}
+
+fn state_default() -> AppState {
+    AppState::new(Arc::new(MemRepo::default()), Arc::new(MockRunner))
 }
 
 /// Needs phase-1 `Agent::prompt` / `SessionStore` (currently `todo!()`), with an
@@ -261,7 +351,7 @@ async fn real_agent_with_mock_provider() {
         thinking: None,
     };
     let store = oc_core::SessionStore::open_default().unwrap();
-    let app = router(AppState::from_agent(agent, store));
+    let app = router(AppState::from_agent(agent, store).with_security(crate::Security::disabled()));
     let id = create(&app).await;
     let (st, v) = call(&app, "POST", &format!("/session/{id}/message"), Some(json!({"text": "hi"}))).await;
     assert_eq!(st, StatusCode::OK);

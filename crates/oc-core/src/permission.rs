@@ -11,6 +11,7 @@
 //! order (a lone `"*"` entry is always treated as the base, i.e. evaluated first).
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -162,6 +163,32 @@ pub fn normalize_path(cwd: &Path, p: &str) -> PathBuf {
     out
 }
 
+/// Resolve symlinks on the existing part of a path, so a symlink *inside* the project
+/// cannot smuggle a read or write outside it (`data -> /etc`, then `write data/x`).
+/// Falls back to the lexical path when nothing on the path exists yet; in that case the
+/// existing parent chain is still canonicalized.
+pub fn real_path(cwd: &Path, p: &str) -> PathBuf {
+    let lexical = normalize_path(cwd, p);
+    let mut ancestor: PathBuf = lexical.clone();
+    let mut tail: Vec<OsString> = Vec::new();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(&ancestor) {
+            let mut out = real;
+            for name in tail.iter().rev() {
+                out.push(name);
+            }
+            return out;
+        }
+        match (ancestor.file_name().map(|n| n.to_os_string()), ancestor.parent().map(Path::to_path_buf)) {
+            (Some(name), Some(parent)) => {
+                tail.push(name);
+                ancestor = parent;
+            }
+            _ => return lexical,
+        }
+    }
+}
+
 /// Split a shell command into simple commands (on `; & | newline ( )` and `$(`/backticks
 /// outside single quotes), so every part is checked on its own.
 pub fn split_commands(cmd: &str) -> Vec<String> {
@@ -267,6 +294,39 @@ impl RulePermission {
         abs.strip_prefix(&self.cwd).unwrap_or(abs).to_string_lossy().into_owned()
     }
 
+    /// Permission items for one file path: the tool's own permission, plus an
+    /// `external_directory` item when the *real* (symlink-resolved) path leaves the project.
+    /// `is_dir_tool` marks tools whose path is a directory (list/glob/grep).
+    fn file_item(&self, perm: &str, raw: &str, is_dir_tool: bool) -> Vec<Item> {
+        let abs = real_path(&self.cwd, raw);
+        let rel = self.display_path(&abs);
+        // Matching is done on the path as written and on its lowercase form, taking the
+        // stricter result, so `.ENV` cannot slip past a `*.env` ask/deny rule.
+        let action = self.eval(perm, &rel).max(self.eval(perm, &rel.to_ascii_lowercase()));
+        let mut items = vec![Item {
+            permission: perm.into(),
+            action,
+            always: if perm == "read" && rel.to_ascii_lowercase().contains(".env") { rel.clone() } else { "*".into() },
+            resource: rel,
+        }];
+        if !abs.starts_with(&self.cwd) {
+            let dir = if is_dir_tool || abs.is_dir() {
+                abs.clone()
+            } else {
+                abs.parent().map(Path::to_path_buf).unwrap_or_else(|| abs.clone())
+            };
+            let dir = dir.to_string_lossy().into_owned();
+            let resource = format!("{}/*", dir.trim_end_matches('/'));
+            items.push(Item {
+                permission: "external_directory".into(),
+                action: self.eval("external_directory", &resource),
+                always: resource.clone(),
+                resource,
+            });
+        }
+        items
+    }
+
     fn items(&self, req: &PermissionRequest) -> Vec<Item> {
         let str_of = |k: &str| req.input.get(k).and_then(Value::as_str);
         let mut items = Vec::new();
@@ -274,9 +334,10 @@ impl RulePermission {
         match tool {
             "bash" => {
                 let cmd = str_of("command").unwrap_or("");
-                let segs = split_commands(cmd);
-                let segs = if segs.is_empty() { vec![cmd.trim().to_string()] } else { segs };
-                for s in segs {
+                let analysis = crate::bashcmd::analyze_bash(cmd);
+                let commands =
+                    if analysis.commands.is_empty() { vec![cmd.trim().to_string()] } else { analysis.commands };
+                for s in commands {
                     items.push(Item {
                         permission: "bash".into(),
                         action: self.eval("bash", &s),
@@ -284,34 +345,26 @@ impl RulePermission {
                         resource: s,
                     });
                 }
+                // A redirection (`> file`) writes a file; hold it to the same `edit`
+                // permission a write/edit tool call needs, so bash cannot bypass it.
+                for target in analysis.writes {
+                    items.extend(self.file_item("edit", &target, false));
+                }
+                // The parser could not fully understand the line; never auto-allow it.
+                if analysis.uncertain {
+                    items.push(Item {
+                        permission: "bash".into(),
+                        action: self.eval("bash", cmd).max(Action::Ask),
+                        always: "\u{0}unparsable".into(), // never matches a real command → not remembered
+                        resource: cmd.to_string(),
+                    });
+                }
             }
             "read" | "edit" | "write" | "patch" | "multiedit" | "list" | "glob" | "grep" => {
                 let perm = if matches!(tool, "edit" | "write" | "patch" | "multiedit") { "edit" } else { tool };
                 let raw = str_of("file_path").or_else(|| str_of("filePath")).or_else(|| str_of("path")).unwrap_or(".");
-                let abs = normalize_path(&self.cwd, raw);
-                let rel = self.display_path(&abs);
-                let external = !abs.starts_with(&self.cwd);
-                items.push(Item {
-                    permission: perm.into(),
-                    action: self.eval(perm, &rel),
-                    always: if perm == "read" && rel.contains(".env") { rel.clone() } else { "*".into() },
-                    resource: rel,
-                });
-                if external {
-                    let dir = if matches!(tool, "list" | "glob" | "grep") || abs.is_dir() {
-                        abs.clone()
-                    } else {
-                        abs.parent().map(Path::to_path_buf).unwrap_or_else(|| abs.clone())
-                    };
-                    let dir = dir.to_string_lossy().into_owned();
-                    let resource = format!("{}/*", dir.trim_end_matches('/'));
-                    items.push(Item {
-                        permission: "external_directory".into(),
-                        action: self.eval("external_directory", &resource),
-                        always: resource.clone(),
-                        resource,
-                    });
-                }
+                let is_dir_tool = matches!(tool, "list" | "glob" | "grep");
+                items.extend(self.file_item(perm, raw, is_dir_tool));
             }
             other => {
                 let resource = str_of("url").or_else(|| str_of("query")).unwrap_or("*").to_string();
@@ -513,6 +566,37 @@ mod tests {
         assert_eq!(normalize_path(cwd, "a/../b/./c"), PathBuf::from("/proj/b/c"));
         assert_eq!(normalize_path(cwd, "../x"), PathBuf::from("/x"));
         assert_eq!(normalize_path(cwd, "/etc/passwd"), PathBuf::from("/etc/passwd"));
+    }
+
+    #[test]
+    fn real_path_follows_symlinks_out_of_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = std::fs::canonicalize(dir.path()).unwrap();
+        let outside = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        // `data` inside cwd points outside; writing `data/evil` must resolve outside cwd.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, cwd.join("data")).unwrap();
+            let real = real_path(&cwd, "data/evil");
+            assert!(real.starts_with(&outside), "{real:?}");
+            assert!(!real.starts_with(&cwd), "symlink escaped the boundary check");
+        }
+        // A plain in-cwd path stays inside.
+        assert!(real_path(&cwd, "src/main.rs").starts_with(&cwd));
+    }
+
+    #[tokio::test]
+    async fn env_file_case_insensitive() {
+        // Reading `.env` is allowed by default only if it asks; `.ENV` must ask too.
+        let (h, a) = handler(json!({}), PermissionDecision::Deny { reason: None });
+        for name in [".env", ".ENV", ".Env"] {
+            let d = h.check(&req("read", json!({ "file_path": name }))).await;
+            assert!(matches!(d, PermissionDecision::Deny { .. }), "{name} was not gated");
+        }
+        // `.env.example` stays allowed.
+        let d = h.check(&req("read", json!({ "file_path": ".env.example" }))).await;
+        assert_eq!(d, PermissionDecision::Allow);
+        let _ = a;
     }
 
     #[tokio::test]
