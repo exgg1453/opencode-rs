@@ -17,7 +17,7 @@ async fn example_plugin_end_to_end() {
         "broken": {"command":["/nonexistent/plugin"]}
     }));
     let mut reg = ToolRegistry::default();
-    let hooks = oc_ext::load_plugins_with_tools(&c, Path::new("/nonexistent-cwd"), &mut reg).await.unwrap();
+    let hooks = oc_ext::load_plugins_with_tools(&c, Path::new("/nonexistent-cwd"), &mut reg, true).await.unwrap();
     assert_eq!(hooks.len(), 1);
     assert_eq!(reg.tools.len(), 1);
     let t = &reg.tools[0];
@@ -82,7 +82,7 @@ async fn plugin_dir_discovery() {
         std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(dir.join("notes.txt"), "not a plugin").unwrap();
         let mut reg = ToolRegistry::default();
-        let hooks = oc_ext::load_plugins_with_tools(&Config::default(), &cwd, &mut reg).await.unwrap();
+        let hooks = oc_ext::load_plugins_with_tools(&Config::default(), &cwd, &mut reg, true).await.unwrap();
         std::fs::remove_dir_all(&cwd).ok();
         assert_eq!(hooks.len(), 1);
         assert_eq!(reg.tools.len(), 1);

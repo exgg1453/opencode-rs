@@ -18,6 +18,7 @@ mod config;
 pub mod hooks;
 pub mod permission;
 pub mod share;
+pub mod trust;
 mod prompt;
 mod session;
 pub mod tools;

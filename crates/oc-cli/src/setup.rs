@@ -35,7 +35,21 @@ pub fn resolve_cwd(cwd: Option<PathBuf>) -> Result<PathBuf> {
 }
 
 pub async fn build_agent(model_flag: Option<&str>, thinking_flag: Option<ThinkingArg>, cwd: &std::path::Path) -> Result<Agent> {
-    let config = Config::load(cwd)?;
+    // A project's own opencode.json / .opencode/plugins can define programs that would run
+    // at startup. Only run them when the user has trusted this directory; otherwise ignore
+    // those project-sourced, command-spawning settings (global config is always trusted).
+    let trusted = oc_core::trust::is_trusted(cwd);
+    let (config, project_wants_commands) = Config::load_gated(cwd, trusted)?;
+    let project_plugin_dir = cwd.join(".opencode/plugins").is_dir();
+    if !trusted && (project_wants_commands || project_plugin_dir) {
+        eprintln!(
+            "warning: this folder defines plugins/MCP/LSP commands that can run programs on your\n\
+             machine. They are disabled because the folder is not trusted. If you trust it, run:\n\
+             \n    opencode trust\n\n\
+             (only do this for code you trust — it lets the project start programs automatically)"
+        );
+    }
+
     let thinking = resolve_thinking(thinking_flag, &config)?;
     let model = resolve_model(model_flag, &config);
     let (provider, model_id) = oc_core::provider_from_config(&model, &config)?;
@@ -45,7 +59,7 @@ pub async fn build_agent(model_flag: Option<&str>, thinking_flag: Option<Thinkin
         eprintln!("warning: failed to load extensions: {e:#}");
     }
     let mut hooks = AgentHooks::default();
-    match oc_ext::load_plugins_with_tools(&config, cwd, &mut tools).await {
+    match oc_ext::load_plugins_with_tools(&config, cwd, &mut tools, trusted).await {
         Ok(p) => hooks.tools = p,
         Err(e) => eprintln!("warning: failed to load plugins: {e:#}"),
     }

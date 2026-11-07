@@ -168,3 +168,35 @@ argümanını atla; tanınmayan değer-alan opsiyonda `uncertain=true` ile fail-
 1. **#5 (kritik)** — workspace-trust onayı; yerel-depo RCE vektörü hâlâ açık.
 2. #6 (orta) — wrapper opsiyon-aritesi + fail-closed.
 3. #7 (düşük) — token log maskeleme, paylaşım redaksiyonu.
+
+## Düzeltme turu 2 — durum: #5–#7 KAPATILDI (2026-11-07)
+
+`cargo test --workspace` (216 test) ve `cargo clippy --workspace --all-targets -- -D warnings` temiz.
+
+### #5 — ✅ DÜZELTİLDİ: workspace-trust modeli
+- `crates/oc-core/src/trust.rs`: güvenilen dizin deposu (`~/.local/share/opencode-rs/trust.json`,
+  canonical yol). `is_trusted` / `trust` / `untrust` / `list`.
+- `Config::load_gated(cwd, trust_project)`: dizin güvenilmiyorsa proje `opencode.json`'undan
+  **komut taşıyan** anahtarları (`mcp`, `lsp`, `plugin`) merge'ten düşürür; projenin bunları
+  tanımlamaya çalışıp çalışmadığını da döndürür (uyarı için).
+- `oc_ext::load_plugins_with_tools(.., allow_project)` + `process::discover(.., allow_project)`:
+  güvenilmiyorsa `<cwd>/.opencode/plugins` **taranmaz** (yalnızca global `~/.config/opencode/plugins`).
+- `build_agent` (`setup.rs`): başta `trust::is_trusted(cwd)` bakar; güvenilmiyorsa komut taşıyan
+  proje ayarları devre dışı kalır ve kullanıcıya `opencode trust` öneren bir uyarı yazılır.
+- Yeni komut: `opencode trust [--list|--remove]`.
+- Sonuç: klonlanan depo + `cd` + `opencode` artık promptsuz kod çalıştıramaz; global config
+  her zaman güvenilir kalır, kullanım bozulmaz.
+
+### #6 — ✅ DÜZELTİLDİ: wrapper opsiyon-aritesi + daha fazla komut-yazıcı
+- `bashcmd.rs`: her wrapper için **değer-alan opsiyon tablosu** (`value_option`); `sudo -u root rm`
+  artık `rm` olarak çözülür (`root` program sanılmaz). `sudo -n` gibi bayraklar tek token.
+- `eval '<script>'` ve `su [-] [user] -c '<cmd>'` artık rekürse edilir.
+- `writer_targets`: `tee`, `dd of=`, `cp`/`mv`/`install` (hedef), `sed -i` (dosya) → hepsi
+  **`edit` iznine** bağlanır (redirection gibi). Testler: `value_taking_wrapper_options_dont_hide_the_program`,
+  `eval_and_su_are_recursed`, `command_writers_are_writes`.
+
+### #7 — ✅ DÜZELTİLDİ: token log maskeleme + paylaşım redaksiyonu
+- `routes.rs`: `TraceLayer` artık yalnızca method + **path** loglar; sorgu dizgesi (`?token=`) loglanmaz.
+- `share.rs::redact_session`/`redact_text`: paylaşmadan **önce** bir kopya üzerinde sk-/ghp_/AKIA/
+  AIza/xox*/Bearer/PEM anahtarları ve `*_API_KEY=…` gibi env satırları `[redacted]` ile maskelenir;
+  yerel oturum değişmez. Tam garanti değil ama ham sır sızıntısını kapatır. Testler: `redaction_*`.

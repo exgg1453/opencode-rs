@@ -123,12 +123,17 @@ pub fn discover_dir(dir: &Path) -> Vec<PluginSpec> {
 
 /// Config entries first, then `~/.config/opencode/plugins`, then `<cwd>/.opencode/plugins`.
 /// Names are unique; the first definition wins.
-pub fn discover(config: &oc_core::Config, cwd: &Path) -> Vec<PluginSpec> {
+/// Discover plugins. `allow_project` gates the project-local sources (`config.plugin`
+/// coming from the project file is already stripped upstream when untrusted; this also
+/// skips the `<cwd>/.opencode/plugins` directory), so an untrusted clone cannot run code.
+pub fn discover(config: &oc_core::Config, cwd: &Path, allow_project: bool) -> Vec<PluginSpec> {
     let mut specs = parse_config(&config.plugin);
     if let Some(home) = std::env::var_os("HOME") {
         specs.extend(discover_dir(&PathBuf::from(home).join(".config/opencode/plugins")));
     }
-    specs.extend(discover_dir(&cwd.join(".opencode/plugins")));
+    if allow_project {
+        specs.extend(discover_dir(&cwd.join(".opencode/plugins")));
+    }
     let mut seen = HashSet::new();
     specs.retain(|s| seen.insert(s.name.clone()));
     specs

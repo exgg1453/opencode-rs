@@ -122,17 +122,19 @@ async fn futures_join(
 /// Custom tools defined by plugins are dropped; use [`load_plugins_with_tools`] to get them.
 pub async fn load_plugins(config: &Config, cwd: &std::path::Path) -> anyhow::Result<Vec<Arc<dyn ToolHook>>> {
     let mut scratch = ToolRegistry::default();
-    load_plugins_with_tools(config, cwd, &mut scratch).await
+    load_plugins_with_tools(config, cwd, &mut scratch, true).await
 }
 
 /// Like [`load_plugins`], but also registers plugin-defined tools into `registry`.
-/// A plugin that fails to start is logged and skipped.
+/// A plugin that fails to start is logged and skipped. `allow_project` must be false for an
+/// untrusted directory, so only global plugins load and the project's `.opencode/plugins` is skipped.
 pub async fn load_plugins_with_tools(
     config: &Config,
     cwd: &std::path::Path,
     registry: &mut ToolRegistry,
+    allow_project: bool,
 ) -> anyhow::Result<Vec<Arc<dyn ToolHook>>> {
-    let specs = process::discover(config, cwd);
+    let specs = process::discover(config, cwd, allow_project);
     let mut hooks: Vec<Arc<dyn ToolHook>> = Vec::new();
     for spec in specs {
         match process::ProcessPlugin::start(&spec, cwd).await {

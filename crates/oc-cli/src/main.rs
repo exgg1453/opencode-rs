@@ -86,6 +86,28 @@ async fn real_main() -> Result<bool> {
             account::run_import(a)?;
             Ok(true)
         }
+        Some(Command::Trust(a)) => {
+            if a.list {
+                let dirs = oc_core::trust::list();
+                if dirs.is_empty() {
+                    println!("No trusted folders.");
+                }
+                for d in dirs {
+                    println!("{d}");
+                }
+            } else if a.remove {
+                if oc_core::trust::untrust(&cwd)? {
+                    println!("Removed trust for {}", cwd.display());
+                } else {
+                    println!("{} was not trusted", cwd.display());
+                }
+            } else if oc_core::trust::trust(&cwd)? {
+                println!("Trusted {}. Its plugins, MCP and LSP commands can now run.", cwd.display());
+            } else {
+                println!("{} is already trusted.", cwd.display());
+            }
+            Ok(true)
+        }
         Some(Command::Sessions) => {
             let store = SessionStore::open_default()?;
             for s in store.list()? {

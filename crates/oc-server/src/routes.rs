@@ -42,6 +42,10 @@ pub fn router(state: AppState) -> Router {
         .fallback(health::not_found)
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::security::enforce))
         .layer(cors)
-        .layer(TraceLayer::new_for_http())
+        // Log the method and path only — never the query string, so a `?token=` on /event
+        // (or a bearer token anywhere) is not written to logs.
+        .layer(TraceLayer::new_for_http().make_span_with(|req: &axum::http::Request<axum::body::Body>| {
+            tracing::info_span!("request", method = %req.method(), path = %req.uri().path())
+        }))
         .with_state(state)
 }

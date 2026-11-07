@@ -66,6 +66,30 @@ impl Config {
         Ok(cfg)
     }
 
+    /// Like [`load`](Self::load), but when `trust_project` is false the project's
+    /// `opencode.json` is not allowed to define process-spawning settings (`mcp`, `lsp`,
+    /// `plugin`): those keys are dropped from the project layer before merging. Returns the
+    /// config and whether the project tried to set any of them (so the caller can warn).
+    pub fn load_gated(cwd: &Path, trust_project: bool) -> anyhow::Result<(Config, bool)> {
+        let mut cfg = Config::default();
+        if let Some(p) = global_config_path() {
+            if let Some(g) = read_opt(&p)? {
+                cfg.merge(g);
+            }
+        }
+        let mut project_wants_commands = false;
+        if let Some(mut p) = read_opt(&cwd.join("opencode.json"))? {
+            project_wants_commands = !p.mcp.is_empty() || !p.plugin.is_empty() || p.lsp.is_some();
+            if !trust_project {
+                p.mcp.clear();
+                p.plugin.clear();
+                p.lsp = None;
+            }
+            cfg.merge(p);
+        }
+        Ok((cfg, project_wants_commands))
+    }
+
     /// The configured thinking level (`None` when unset or "off").
     pub fn thinking_level(&self) -> anyhow::Result<Option<oc_ai::ThinkingLevel>> {
         match &self.thinking {

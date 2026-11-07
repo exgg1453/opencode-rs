@@ -63,6 +63,18 @@ pub enum Command {
     Export(crate::account::ExportArgs),
     /// Import a session from a JSON file
     Import(crate::account::ImportArgs),
+    /// Trust this folder so its project-defined plugins/MCP/LSP commands may run
+    Trust(TrustArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct TrustArgs {
+    /// Show all trusted folders instead of trusting this one
+    #[arg(long)]
+    pub list: bool,
+    /// Remove trust for this folder
+    #[arg(long)]
+    pub remove: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

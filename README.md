@@ -269,6 +269,18 @@ Settings are read from `~/.config/opencode/opencode.json` (global) and then `ope
 | `lsp` | Language server overrides; `"lsp": false` turns LSP off |
 | `share_url` | Server used by `share` (default `http://127.0.0.1:4096`) |
 
+## Trusted folders
+
+A project's own `opencode.json` and `.opencode/plugins/` can define programs (MCP servers, language servers, plugins) that would otherwise start the moment you open the folder. Because you might open a repository you just cloned, opencode-rs **ignores those project-defined commands until you trust the folder** — global settings under `~/.config/opencode` always run, since they are your own. When a folder defines such commands and isn't trusted, you'll see a warning; to allow them:
+
+```sh
+opencode trust            # trust the current folder
+opencode trust --list     # show trusted folders
+opencode trust --remove   # revoke trust for the current folder
+```
+
+Only trust folders whose code you trust. Everything else — the model, the built-in tools, your own global plugins — works untrusted.
+
 ## Permissions
 
 Before every tool call the agent checks your rules. Each rule is `allow`, `ask` or `deny`; when several rules match, **the last one wins**.

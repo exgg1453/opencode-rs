@@ -6,7 +6,61 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 
+use oc_ai::ContentBlock;
+
 use crate::{Config, Session};
+
+/// Mask secrets in a session before it leaves the machine. A shared page shows tool
+/// output verbatim, so if the agent ran `cat .env` or `env` the keys would otherwise be
+/// published at a stable (if unguessable) URL. Redaction runs on a copy; the local session
+/// is untouched. This reduces, but cannot guarantee the absence of, leaked secrets.
+pub fn redact_session(session: &mut Session) {
+    session.title = redact_text(&session.title);
+    for msg in &mut session.messages {
+        for block in &mut msg.content {
+            match block {
+                ContentBlock::Text { text } => *text = redact_text(text),
+                ContentBlock::ToolResult { content, .. } => *content = redact_text(content),
+                ContentBlock::ToolUse { input, .. } => {
+                    if let Ok(s) = serde_json::to_string(input) {
+                        if let Ok(v) = serde_json::from_str(&redact_text(&s)) {
+                            *input = v;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Replace secret-looking substrings with `[redacted]`.
+pub fn redact_text(text: &str) -> String {
+    use regex::Regex;
+    // Built per call; sharing is rare, so this is not hot.
+    let patterns = [
+        // Provider API keys and tokens with a distinctive prefix.
+        r"sk-[A-Za-z0-9_-]{16,}",
+        r"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}",
+        r"github_pat_[A-Za-z0-9_]{20,}",
+        r"xox[baprs]-[A-Za-z0-9-]{10,}",
+        r"AKIA[0-9A-Z]{16}",
+        r"AIza[0-9A-Za-z_-]{20,}",
+        r"(?i)bearer\s+[A-Za-z0-9._~+/-]{16,}=*",
+        // PEM private keys (whole block).
+        r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+    ];
+    let mut out = text.to_string();
+    for p in patterns {
+        out = Regex::new(p).unwrap().replace_all(&out, "[redacted]").into_owned();
+    }
+    // `NAME=value` / `NAME: value` lines whose name looks sensitive.
+    let kv = Regex::new(
+        r"(?im)^(\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API)[A-Za-z0-9_]*\s*[=:]\s*)\S+",
+    )
+    .unwrap();
+    kv.replace_all(&out, "${1}[redacted]").into_owned()
+}
 
 /// Locally remembered share: lets `unshare` authenticate against the server.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +154,13 @@ pub async fn share_session(config: &Config, session: &Session) -> anyhow::Result
 
 pub async fn share_with_store(config: &Config, session: &Session, store: &ShareStore) -> anyhow::Result<String> {
     let base = share_base(config);
+    // Never upload raw secrets: redact a copy and send that.
+    let redacted = {
+        let mut s = session.clone();
+        redact_session(&mut s);
+        s
+    };
+    let session = &redacted;
     let client = reqwest::Client::new();
     if let Some(rec) = store.get(&session.id).filter(|r| r.base == base) {
         let resp = client
@@ -165,6 +226,38 @@ mod tests {
     fn base_precedence_and_trim() {
         let c = Config { share_url: Some("http://h:1/".into()), ..Default::default() };
         assert_eq!(share_base(&c), "http://h:1");
+    }
+
+    #[test]
+    fn redaction_masks_common_secrets() {
+        let r = redact_text("key=sk-abcdefghijklmnopqrstuvwx and ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345");
+        assert!(!r.contains("sk-abcdefghij"), "{r}");
+        assert!(!r.contains("ghp_ABCDEF"), "{r}");
+        assert!(r.contains("[redacted]"));
+
+        let env = redact_text("ANTHROPIC_API_KEY=supersecretvalue\nPATH=/usr/bin");
+        assert!(env.contains("ANTHROPIC_API_KEY=[redacted]"), "{env}");
+        assert!(env.contains("PATH=/usr/bin"), "non-secret kept: {env}");
+    }
+
+    #[test]
+    fn redaction_scrubs_tool_output() {
+        use oc_ai::{ChatMessage, ContentBlock, Role};
+        let mut s = Session::new(std::path::PathBuf::from("/tmp"));
+        s.messages.push(ChatMessage {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "t".into(),
+                content: "OPENAI_API_KEY=sk-0123456789abcdefghijff".into(),
+                is_error: false,
+            }],
+        });
+        redact_session(&mut s);
+        if let ContentBlock::ToolResult { content, .. } = &s.messages[0].content[0] {
+            assert!(!content.contains("sk-0123456789"), "{content}");
+        } else {
+            panic!("block changed shape");
+        }
     }
 
     #[test]
