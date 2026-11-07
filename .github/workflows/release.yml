@@ -79,14 +79,15 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
+      # Checkout first: it cleans the workspace, which would delete downloaded artifacts.
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
           sparse-checkout: .github/release-notes.md
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
           body_path: .github/release-notes.md
@@ -94,3 +95,4 @@ jobs:
           name: opencode-rs ${{ env.TAG }}
           generate_release_notes: true
           files: dist/*
+          fail_on_unmatched_files: true
