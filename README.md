@@ -45,15 +45,23 @@ opencode-rs is a Rust rewrite of [OpenCode](https://github.com/sst/opencode). Yo
 
 ## Installation
 
-### One-line install (Linux & macOS)
+### One-line install
 
-Detects your OS and CPU, downloads the right binary, verifies its checksum and installs it:
+Each script detects your CPU, downloads the right binary, verifies its checksum and installs it.
+
+**Linux & macOS:**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/exgg1453/opencode-rs/main/install.sh | sh
 ```
 
-It installs to `/usr/local/bin` when it can, otherwise `~/.local/bin` (set `OCRS_INSTALL_DIR` to choose, or `OCRS_VERSION=v0.1.2` to pin a version). Prefer not to pipe a script into a shell unseen? [Read it first](https://github.com/exgg1453/opencode-rs/blob/main/install.sh), or use the manual download below. On Windows, use the `.zip` from the table.
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/exgg1453/opencode-rs/main/install.ps1 | iex
+```
+
+The Unix script installs to `/usr/local/bin` when it can, otherwise `~/.local/bin`; the Windows script installs to `%LOCALAPPDATA%\opencode\bin` and adds it to your PATH. Set `OCRS_INSTALL_DIR` to choose the folder, or `OCRS_VERSION=v0.1.2` to pin a version. Prefer not to pipe a script into a shell unseen? Read it first ([install.sh](https://github.com/exgg1453/opencode-rs/blob/main/install.sh), [install.ps1](https://github.com/exgg1453/opencode-rs/blob/main/install.ps1)), or use the manual download below.
 
 ### Download a ready-made program
 
