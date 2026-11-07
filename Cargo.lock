@@ -989,7 +989,7 @@ dependencies = [
 
 [[package]]
 name = "oc-ai"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1002,7 +1002,7 @@ dependencies = [
 
 [[package]]
 name = "oc-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1023,7 +1023,7 @@ dependencies = [
 
 [[package]]
 name = "oc-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1042,7 +1042,7 @@ dependencies = [
 
 [[package]]
 name = "oc-ext"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1058,7 +1058,7 @@ dependencies = [
 
 [[package]]
 name = "oc-lsp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1072,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "oc-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1096,7 +1096,7 @@ dependencies = [
 
 [[package]]
 name = "oc-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",

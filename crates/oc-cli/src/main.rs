@@ -12,11 +12,6 @@ use clap::Parser;
 use cli::{Cli, Command};
 use oc_core::SessionStore;
 
-const PROVIDERS: &[(&str, &str, &str)] = &[
-    ("anthropic", "ANTHROPIC_API_KEY", "anthropic/claude-sonnet-5-5"),
-    ("openai", "OPENAI_API_KEY", "openai/gpt-5"),
-];
-
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -38,11 +33,7 @@ async fn real_main() -> Result<bool> {
     let cwd = setup::resolve_cwd(cli.cwd.clone())?;
     match cli.command {
         Some(Command::Models) => {
-            for (name, env, example) in PROVIDERS {
-                let set = if std::env::var(env).is_ok() { "configured" } else { "no key" };
-                println!("{name}\t{example}\t({env}: {set})");
-            }
-            println!("default model: {}", cli::DEFAULT_MODEL);
+            account::run_models(&oc_core::auth::AuthStore::open_default());
             Ok(true)
         }
         Some(Command::Auth(c)) => {

@@ -8,17 +8,10 @@ use oc_ai::{ContentBlock, Role};
 use oc_core::auth::AuthStore;
 use oc_core::{Config, Session, SessionStore};
 
-/// Providers shown by `auth login` / `auth list`, with their environment variable.
-pub const KNOWN_PROVIDERS: &[(&str, &str)] = &[
-    ("anthropic", "ANTHROPIC_API_KEY"),
-    ("openai", "OPENAI_API_KEY"),
-    ("google", "GEMINI_API_KEY"),
-    ("openrouter", "OPENROUTER_API_KEY"),
-    ("groq", "GROQ_API_KEY"),
-    ("mistral", "MISTRAL_API_KEY"),
-    ("xai", "XAI_API_KEY"),
-    ("deepseek", "DEEPSEEK_API_KEY"),
-];
+/// Provider ids the provider registry knows, in its order.
+fn known_provider_ids() -> Vec<&'static str> {
+    oc_ai::known_providers().into_iter().map(|p| p.id).collect()
+}
 
 #[derive(Debug, Subcommand)]
 pub enum AuthCommand {
@@ -63,10 +56,10 @@ pub struct ImportArgs {
 }
 
 pub fn env_var_for(provider: &str) -> String {
-    KNOWN_PROVIDERS
-        .iter()
-        .find(|(p, _)| *p == provider)
-        .map(|(_, e)| e.to_string())
+    oc_ai::known_providers()
+        .into_iter()
+        .find(|p| p.id == provider)
+        .and_then(|p| p.env_vars.first().map(|e| e.to_string()))
         .unwrap_or_else(|| format!("{}_API_KEY", provider.to_uppercase().replace(['-', '.'], "_")))
 }
 
@@ -88,7 +81,7 @@ pub fn run_auth_with(
                 Some(p) => p,
                 None => {
                     println!("Known providers:");
-                    for (p, _) in KNOWN_PROVIDERS {
+                    for p in known_provider_ids() {
                         println!("  {p}");
                     }
                     print!("Provider: ");
@@ -122,7 +115,7 @@ pub fn run_auth_with(
                 println!("  {p}");
             }
             println!("Environment:");
-            let mut names: Vec<String> = KNOWN_PROVIDERS.iter().map(|(p, _)| p.to_string()).collect();
+            let mut names: Vec<String> = known_provider_ids().into_iter().map(str::to_string).collect();
             let extra: Vec<String> = stored.iter().filter(|p| !names.contains(p)).cloned().collect();
             names.extend(extra);
             for p in names {
@@ -133,6 +126,28 @@ pub fn run_auth_with(
         }
     }
     Ok(())
+}
+
+/// `opencode models`: every provider the registry can build, and whether it has a key.
+pub fn run_models(store: &AuthStore) {
+    let stored = store.list();
+    println!("{:<12} {:<16} KEY", "PROVIDER", "NAME");
+    for p in oc_ai::known_providers() {
+        let env = p.env_vars.iter().find(|e| std::env::var(e).is_ok_and(|v| !v.is_empty()));
+        let key = if stored.iter().any(|s| s == p.id) {
+            "stored (opencode auth login)".to_string()
+        } else if let Some(e) = env {
+            format!("from {e}")
+        } else if p.env_vars.is_empty() {
+            "not needed (local)".to_string()
+        } else {
+            format!("missing: set {} or run `opencode auth login {}`", p.env_vars[0], p.id)
+        };
+        println!("{:<12} {:<16} {key}", p.id, p.name);
+    }
+    println!();
+    println!("Use a model as --model <provider>/<model>, e.g. --model {}", crate::cli::DEFAULT_MODEL);
+    println!("Any other provider id works when `provider.<id>.options.baseURL` is set in opencode.json.");
 }
 
 fn load_session(store: &SessionStore, id: &str) -> Result<Session> {

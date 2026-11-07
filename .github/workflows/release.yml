@@ -26,12 +26,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # musl: one static binary that runs on any Linux distribution.
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, musl: true }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, musl: true }
-          - { os: macos-latest, target: aarch64-apple-darwin }
-          - { os: macos-latest, target: x86_64-apple-darwin }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          # `asset` is the user-facing archive name; musl gives one static binary
+          # that runs on any Linux distribution.
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, asset: opencode-linux-64bit, musl: true }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, asset: opencode-linux-arm64, musl: true }
+          - { os: macos-latest, target: aarch64-apple-darwin, asset: opencode-macos-apple-silicon }
+          - { os: macos-latest, target: x86_64-apple-darwin, asset: opencode-macos-intel }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, asset: opencode-windows-64bit }
+          - { os: windows-latest, target: i686-pc-windows-msvc, asset: opencode-windows-32bit }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,7 +52,7 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          name=opencode-${{ matrix.target }}
+          name=${{ matrix.asset }}
           mkdir "$name"
           cp target/${{ matrix.target }}/release/opencode README.md "$name"/
           tar -czf "$name.tar.gz" "$name"
@@ -59,7 +61,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $name = "opencode-${{ matrix.target }}"
+          $name = "${{ matrix.asset }}"
           New-Item -ItemType Directory $name | Out-Null
           Copy-Item target/${{ matrix.target }}/release/opencode.exe, README.md $name
           Compress-Archive -Path $name -DestinationPath "$name.zip"
@@ -81,8 +83,13 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          sparse-checkout: .github/release-notes.md
       - uses: softprops/action-gh-release@v2
         with:
+          body_path: .github/release-notes.md
           tag_name: ${{ env.TAG }}
           name: opencode-rs ${{ env.TAG }}
           generate_release_notes: true
